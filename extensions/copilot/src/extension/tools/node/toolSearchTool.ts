@@ -16,6 +16,14 @@ import { IToolEmbeddingsComputer } from '../common/virtualTools/toolEmbeddingsCo
 export interface IToolSearchParams {
 	query: string;
 	limit?: number;
+	/** Internal Agent Host corpus; not part of the model-facing schema. */
+	candidateTools?: readonly IToolSearchCandidate[];
+}
+
+export interface IToolSearchCandidate {
+	name: string;
+	description: string;
+	inputSchema?: object;
 }
 
 const DEFAULT_SEARCH_LIMIT = 5;
@@ -29,7 +37,7 @@ export class ToolSearchTool implements ICopilotModelSpecificTool<IToolSearchPara
 	) { }
 
 	async invoke(options: vscode.LanguageModelToolInvocationOptions<IToolSearchParams>, token: vscode.CancellationToken) {
-		const { query, limit } = options.input;
+		const { query, limit, candidateTools } = options.input;
 
 		if (!query) {
 			return new LanguageModelToolResult([
@@ -37,14 +45,23 @@ export class ToolSearchTool implements ICopilotModelSpecificTool<IToolSearchPara
 			]);
 		}
 
-		const availableTools = this._toolsService.tools.filter(
-			tool => !this._toolDeferralService.isNonDeferredTool(tool.name),
-		);
+		const availableTools: readonly vscode.LanguageModelToolInformation[] = candidateTools !== undefined
+			? candidateTools.map(tool => ({
+				name: tool.name,
+				description: tool.description,
+				inputSchema: tool.inputSchema,
+				tags: [],
+				source: undefined,
+			}))
+			: this._toolsService.tools.filter(
+				tool => !this._toolDeferralService.isNonDeferredTool(tool.name),
+			);
 		const matchedToolNames = await this._toolEmbeddingsComputer.searchToolsByQuery(
 			query,
 			availableTools,
 			limit ?? DEFAULT_SEARCH_LIMIT,
 			token,
+			candidateTools !== undefined ? { useCache: false } : undefined,
 		);
 
 		this._logService.trace(`[custom-tool-search] Query "${query}" matched ${matchedToolNames.length} tools: ${JSON.stringify(matchedToolNames)}`);

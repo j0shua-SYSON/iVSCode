@@ -34,6 +34,7 @@ import { readToolCallMeta } from '../../../../../../platform/agentHost/common/me
 import { readCompletionAttachmentMeta } from '../../../../../../platform/agentHost/common/meta/agentCompletionAttachmentMeta.js';
 import { IRemoteAgentHostService } from '../../../../../../platform/agentHost/common/remoteAgentHostService.js';
 import { SessionConfigKey } from '../../../../../../platform/agentHost/common/sessionConfigKeys.js';
+import { CLIENT_TOOL_SEARCH_REFERENCE_NAME, RUNTIME_TOOL_SEARCH_TOOL_NAME } from '../../../../../../platform/agentHost/common/toolSearchConstants.js';
 import type { ChatInputRequestWithPlanReview, IAgentHostPlanReview } from '../../../../../../platform/agentHost/common/agentHostPlanReview.js';
 import { IAgentSubscription, observableFromSubscription } from '../../../../../../platform/agentHost/common/state/agentSubscription.js';
 import { ChatTruncatedAction } from '../../../../../../platform/agentHost/common/state/protocol/actions.js';
@@ -2676,7 +2677,8 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			adopted.didExecuteTool(undefined);
 		}
 
-		const toolData = this._toolsService.getToolByName(toolName);
+		const clientToolName = toolName === RUNTIME_TOOL_SEARCH_TOOL_NAME ? CLIENT_TOOL_SEARCH_REFERENCE_NAME : toolName;
+		const toolData = this._toolsService.getToolByName(clientToolName);
 		if (!toolData) {
 			this._logService.warn(`[AgentHost] Client tool call for unknown tool: ${toolName}`);
 			this._dispatchAction(opts.backendSession, {
@@ -2828,6 +2830,12 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			if (invoked || cts.token.isCancellationRequested) {
 				return;
 			}
+			const toolSearchCandidates = toolName === RUNTIME_TOOL_SEARCH_TOOL_NAME
+				? readToolCallMeta(tc).toolSearchCandidates
+				: undefined;
+			if (toolName === RUNTIME_TOOL_SEARCH_TOOL_NAME && toolSearchCandidates === undefined) {
+				return;
+			}
 			// eslint-disable-next-line local/code-no-in-operator
 			let toolInput = 'toolInput' in tc ? tc.toolInput : undefined;
 			if (toolInput === undefined) {
@@ -2861,6 +2869,9 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 					},
 				}, opts.chatURI);
 				return;
+			}
+			if (toolSearchCandidates !== undefined) {
+				parameters = { ...parameters, candidateTools: toolSearchCandidates };
 			}
 
 			const inv: IToolInvocation = {

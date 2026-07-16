@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type Anthropic from '@anthropic-ai/sdk';
-import type { CopilotSession, PermissionAllowAllMode, SessionEvent, SessionEventHandler, SessionEventPayload, SessionEventType, Tool, ToolResultObject, TypedSessionEventHandler } from '@github/copilot-sdk';
+import type { CopilotSession, CurrentToolMetadata, PermissionAllowAllMode, SessionEvent, SessionEventHandler, SessionEventPayload, SessionEventType, Tool, ToolResultObject, TypedSessionEventHandler } from '@github/copilot-sdk';
 import type { CCAModel } from '@vscode/copilot-api';
 import assert from 'assert';
 import { DeferredPromise, timeout } from '../../../../base/common/async.js';
@@ -279,12 +279,13 @@ class CapturingLogService extends NullLogService {
  * {@link ToolResultObject} — which is what {@link CopilotAgentSession}'s
  * handler implementation actually returns.
  */
-function invokeClientToolHandler(tool: Pick<Tool, 'name' | 'handler'>, toolCallId: string, args: Record<string, unknown> = {}): Promise<ToolResultObject> {
+function invokeClientToolHandler(tool: Pick<Tool, 'name' | 'handler'>, toolCallId: string, args: Record<string, unknown> = {}, availableTools?: CurrentToolMetadata[]): Promise<ToolResultObject> {
 	return Promise.resolve(tool.handler!(args, {
 		sessionId: 'test-session-1',
 		toolCallId,
 		toolName: tool.name,
 		arguments: args,
+		availableTools,
 	})) as Promise<ToolResultObject>;
 }
 
@@ -344,6 +345,7 @@ async function createAgentSession(disposables: DisposableStore, options?: {
 	platform?: NodeJS.Platform;
 	githubToken?: string;
 	copilotApiEndpoint?: string;
+	modelId?: string;
 }): Promise<{
 	session: CopilotAgentSession;
 	runtime: ICopilotSessionRuntime;
@@ -400,7 +402,7 @@ async function createAgentSession(disposables: DisposableStore, options?: {
 		snapshot: options?.clientSnapshot ?? { tools: [], plugins: [], mcpServers: {} },
 		shellManager: undefined,
 		githubToken: options?.githubToken,
-		model: undefined,
+		model: options?.modelId ? { id: options.modelId } : undefined,
 	};
 	let launchedRuntime: ICopilotSessionRuntime | undefined;
 	const sessionLauncher: ICopilotSessionLauncher = {
@@ -4451,6 +4453,84 @@ suite('CopilotAgentSession', () => {
 					},
 				},
 			});
+		});
+
+		test('tool-search override routes to the client and injects deferred candidates', async () => {
+			const toolSearchSnapshot: IActiveClientSnapshot = {
+				tools: [{ name: 'toolSearch', description: 'Search tools', inputSchema: { type: 'object', properties: { query: { type: 'string' } } } }],
+				plugins: [],
+				mcpServers: {},
+			};
+			const activeClientToolSet = new ActiveClientToolSet();
+			activeClientToolSet.set('tool-search-client', toolSearchSnapshot.tools);
+			const { session, runtime, mockSession, signals, waitForSignal } = await createAgentSession(disposables, {
+				clientSnapshot: toolSearchSnapshot,
+				activeClientToolSet,
+				modelId: 'claude-opus-4.8',
+				rootValues: { [CopilotCliConfigKey.ToolSearchEnabled]: true },
+			});
+
+			const [override] = runtime.createClientSdkTools();
+			assert.strictEqual(override.name, 'tool_search_tool');
+			assert.strictEqual(override.overridesBuiltInTool, true);
+			assert.strictEqual(override.defer, 'never');
+			assert.strictEqual(override.skipPermission, true);
+
+			mockSession.fire('tool.execution_start', {
+				toolCallId: 'tc-tool-search',
+				toolName: 'tool_search_tool',
+				arguments: { query: 'add numbers' },
+			} as SessionEventPayload<'tool.execution_start'>['data']);
+
+			const start = signals.find(s => isAction(s, ActionType.ChatToolCallStart));
+			assert.ok(start && isAction(start, ActionType.ChatToolCallStart));
+			assert.deepStrictEqual((start.action as ChatToolCallStartAction).contributor, { kind: ToolCallContributorKind.Client, clientId: 'tool-search-client' });
+
+			const handlerPromise = invokeClientToolHandler(override, 'tc-tool-search', { query: 'add numbers' }, [
+				{ name: 'everything-get-sum', description: 'Adds numbers', deferLoading: true },
+				{ name: 'read_file', description: 'Reads a file', deferLoading: false },
+			]);
+
+			const readySignal = await waitForSignal(s => isAction(s, ActionType.ChatToolCallReady));
+			assert.ok(isAction(readySignal, ActionType.ChatToolCallReady));
+			const ready = readySignal.action as ChatToolCallReadyAction;
+			assert.strictEqual(ready.confirmed, ToolCallConfirmationReason.NotNeeded);
+			assert.deepStrictEqual(ready._meta?.['toolSearchCandidates'], [{ name: 'everything-get-sum', description: 'Adds numbers' }]);
+
+			session.handleClientToolCallComplete('tc-tool-search', {
+				success: true,
+				pastTenseMessage: 'Searched tools',
+				content: [{ type: ToolResultContentType.Text, text: '["everything-get-sum"]' }],
+			});
+
+			const result = await handlerPromise;
+			assert.strictEqual(result.resultType, 'success');
+			assert.deepStrictEqual(result.toolReferences, ['everything-get-sum']);
+		});
+
+		test('toolSearch is omitted when the flag is off or the model is unsupported', async () => {
+			const toolSearchSnapshot: IActiveClientSnapshot = {
+				tools: [
+					{ name: 'toolSearch', description: 'Search tools', inputSchema: { type: 'object', properties: {} } },
+					{ name: 'my_tool', description: 'Regular tool', inputSchema: { type: 'object', properties: {} } },
+				],
+				plugins: [],
+				mcpServers: {},
+			};
+
+			const flagOff = await createAgentSession(disposables, {
+				clientSnapshot: toolSearchSnapshot,
+				modelId: 'claude-opus-4.8',
+				rootValues: { [CopilotCliConfigKey.ToolSearchEnabled]: false },
+			});
+			assert.deepStrictEqual(flagOff.runtime.createClientSdkTools().map(tool => tool.name), ['my_tool']);
+
+			const unsupported = await createAgentSession(disposables, {
+				clientSnapshot: toolSearchSnapshot,
+				modelId: 'claude-haiku-4.5',
+				rootValues: { [CopilotCliConfigKey.ToolSearchEnabled]: true },
+			});
+			assert.deepStrictEqual(unsupported.runtime.createClientSdkTools().map(tool => tool.name), ['my_tool']);
 		});
 
 		test('agent-coordination client tools auto-ready with a tailored invocation message', async () => {

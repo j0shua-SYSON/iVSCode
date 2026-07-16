@@ -3,8 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { CopilotSession, ExitPlanModeRequest, MessageOptions, PermissionAllowAllMode, PermissionAutoApproval, PermissionRequestResult, SessionConfig, Tool, ToolResultObject, McpServerStatus as SdkMcpServerStatus } from '@github/copilot-sdk';
-import { DeferredPromise, Sequencer } from '../../../../base/common/async.js';
+import type { CopilotSession, CurrentToolMetadata, ExitPlanModeRequest, MessageOptions, PermissionAllowAllMode, PermissionAutoApproval, PermissionRequestResult, SessionConfig, Tool, ToolResultObject, McpServerStatus as SdkMcpServerStatus } from '@github/copilot-sdk';
+import { DeferredPromise, raceTimeout, Sequencer } from '../../../../base/common/async.js';
 import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { Emitter } from '../../../../base/common/event.js';
 import { CancellationError, getErrorMessage } from '../../../../base/common/errors.js';
@@ -33,7 +33,7 @@ import { AgentHostSandboxConfigKey, sandboxConfigSchema } from '../../common/san
 import { AgentHostGlobalAutoApproveEnabledConfigKey, AgentHostAutoReplyEnabledConfigKey, platformRootSchema, platformSessionSchema } from '../../common/agentHostSchema.js';
 import { AgentSession, AgentSignal, AuthenticateParams, IMcpNotification, IRestoredSubagentSession, subagentChatTitle } from '../../common/agentService.js';
 import { stripRedundantCdPrefix } from '../../common/commandLineHelpers.js';
-import { readToolCallMeta, toToolCallMeta, type IToolCallMeta, type IToolCallUiMeta } from '../../common/meta/agentToolCallMeta.js';
+import { readToolCallMeta, toToolCallMeta, type IToolCallMeta, type IToolCallUiMeta, type IToolSearchCandidate } from '../../common/meta/agentToolCallMeta.js';
 import { OtelData, type OtelAttributeValue } from '../../common/otlp/otlpLogEmitter.js';
 import { SessionConfigKey } from '../../common/sessionConfigKeys.js';
 import { isAgentFeedbackAnnotationsAttachment, renderAgentFeedbackAnnotationsAttachment } from '../../common/meta/agentFeedbackAttachments.js';
@@ -45,6 +45,7 @@ import { IAgentConfigurationService } from '../agentConfigurationService.js';
 import type { IExitPlanModeResponse } from './copilotAgent.js';
 import { CopilotSessionWrapper } from './copilotSessionWrapper.js';
 import { clientToolNamesFromSnapshot, type CopilotSessionLaunchPlan, type IActiveClientSnapshot, type ICopilotSessionLauncher, type ICopilotSessionRuntime } from './copilotSessionLauncher.js';
+import { agentHostModelSupportsToolSearch, CLIENT_TOOL_SEARCH_REFERENCE_NAME, NON_DEFERRED_CLIENT_TOOL_NAMES, RUNTIME_TOOL_SEARCH_TOOL_NAME } from './toolSearchDeferral.js';
 import { ActiveClientToolSet } from '../activeClientState.js';
 import { AgentHostTelemetryReporter } from '../agentHostTelemetryReporter.js';
 import { PendingRequestRegistry } from '../../common/pendingRequestRegistry.js';
@@ -637,8 +638,12 @@ export class CopilotAgentSession extends Disposable {
 	private readonly _activeClientToolSet: ActiveClientToolSet;
 	/** Tool names that are client-provided, derived from snapshot. */
 	private readonly _clientToolNames: ReadonlySet<string>;
+	/** Launch-time tool-search decision; kept stable for the lifetime of the SDK session. */
+	private readonly _toolSearchActive: boolean;
 	/** Deferred promises for pending client tool calls, keyed by toolCallId. */
 	private readonly _pendingClientToolCalls = new PendingRequestRegistry<ToolResultObject>();
+	/** Tool-start barrier for tool-search handlers that may race the SDK start event. */
+	private readonly _pendingClientToolStarts = new PendingRequestRegistry<boolean>();
 	/** Pending SDK MCP auth handler promises, keyed by SDK auth request id. */
 	private readonly _pendingMcpAuthRequests = new Map<string, IPendingMcpAuthRequest>();
 	/** `pending-edit-content:` URIs written during permission requests, keyed
@@ -728,6 +733,10 @@ export class CopilotAgentSession extends Disposable {
 
 		this._appliedSnapshot = options.clientSnapshot ?? { tools: [], plugins: [], mcpServers: {} };
 		this._clientToolNames = clientToolNamesFromSnapshot(this._appliedSnapshot);
+		const model = this._launchPlan.kind === 'create' ? this._launchPlan.model : this._launchPlan.fallback.model;
+		this._toolSearchActive = this._configurationService.getRootValue(copilotCliConfigSchema, CopilotCliConfigKey.ToolSearchEnabled) === true
+			&& agentHostModelSupportsToolSearch(model?.id)
+			&& this._clientToolNames.has(CLIENT_TOOL_SEARCH_REFERENCE_NAME);
 		// Share the agent's live ActiveClientToolSet when provided so client
 		// contributions (and owner identity) are observed at stamp time.
 		// Standalone / test construction uses a fresh empty registry, which
@@ -782,6 +791,7 @@ export class CopilotAgentSession extends Disposable {
 			}));
 		}
 		this._register(toDisposable(() => this._cancelPendingClientToolCalls()));
+		this._register(toDisposable(() => this._pendingClientToolStarts.denyAll(false)));
 		this._register(toDisposable(() => {
 			for (const pending of this._pendingAutoApprovals.values()) {
 				pending.complete(undefined);
@@ -1051,22 +1061,133 @@ export class CopilotAgentSession extends Disposable {
 		if (tools.length === 0) {
 			return [];
 		}
-		return tools.map(def => ({
-			name: def.name,
-			description: def.description ?? '',
-			parameters: def.inputSchema ?? { type: 'object' as const, properties: {} },
-			handler: async (_args: Record<string, unknown>, { toolCallId }) => {
-				try {
-					// The completion may legitimately arrive before this handler
-					// registers; the registry buffers early results so register()
-					// resolves immediately in that case.
-					return await this._pendingClientToolCalls.register(toolCallId);
-				} catch (error) {
-					this._logService.error(error, `[Copilot:${this.sessionId}] Failed in client tool handler: tool=${def.name}, toolCallId=${toolCallId}`);
-					throw error;
+		const toolSearchActive = this._isToolSearchActive();
+		const sessionTools = toolSearchActive
+			? tools
+			: tools.filter(def => def.name !== CLIENT_TOOL_SEARCH_REFERENCE_NAME);
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		return sessionTools.map((def): Tool<any> => {
+			if (toolSearchActive && def.name === CLIENT_TOOL_SEARCH_REFERENCE_NAME) {
+				return {
+					name: RUNTIME_TOOL_SEARCH_TOOL_NAME,
+					description: def.description ?? '',
+					parameters: def.inputSchema ?? { type: 'object' as const, properties: {} },
+					overridesBuiltInTool: true,
+					defer: 'never',
+					skipPermission: true,
+					handler: async (_args: Record<string, unknown>, invocation) => {
+						try {
+							const started = await raceTimeout(
+								this._pendingClientToolStarts.register(invocation.toolCallId),
+								5_000,
+								() => this._pendingClientToolStarts.respond(invocation.toolCallId, false),
+							);
+							if (started !== true) {
+								return this._toolSearchFailure('Timed out waiting for the tool-search call to start.');
+							}
+
+							const candidates = this._toToolSearchCandidates(invocation.availableTools);
+							const clientResult = await raceTimeout(
+								this._pendingClientToolCalls.registerAndFire(invocation.toolCallId, () => this._emitToolSearchReady(invocation.toolCallId, candidates)),
+								15_000,
+								() => this._pendingClientToolCalls.respond(invocation.toolCallId, this._toolSearchFailure('Timed out waiting for client-side tool search.')),
+							);
+							if (!clientResult) {
+								return this._toolSearchFailure('Timed out waiting for client-side tool search.');
+							}
+							return this._toToolSearchResult(clientResult, invocation.availableTools);
+						} catch (error) {
+							this._logService.error(error, `[Copilot:${this.sessionId}] Failed in tool-search handler: toolCallId=${invocation.toolCallId}`);
+							return this._toolSearchFailure(getErrorMessage(error));
+						}
+					},
+				};
+			}
+			const defer: 'auto' | 'never' | undefined = toolSearchActive
+				? (NON_DEFERRED_CLIENT_TOOL_NAMES.has(def.name) ? 'never' : 'auto')
+				: undefined;
+			return {
+				name: def.name,
+				description: def.description ?? '',
+				parameters: def.inputSchema ?? { type: 'object' as const, properties: {} },
+				defer,
+				handler: async (_args: Record<string, unknown>, { toolCallId }) => {
+					try {
+						return await this._pendingClientToolCalls.register(toolCallId);
+					} catch (error) {
+						this._logService.error(error, `[Copilot:${this.sessionId}] Failed in client tool handler: tool=${def.name}, toolCallId=${toolCallId}`);
+						throw error;
+					}
+				},
+			};
+		});
+	}
+
+	private _isToolSearchActive(): boolean {
+		return this._toolSearchActive;
+	}
+
+	private _clientToolName(toolName: string): string {
+		return this._isToolSearchActive()
+			&& this._clientToolNames.has(CLIENT_TOOL_SEARCH_REFERENCE_NAME)
+			&& toolName === RUNTIME_TOOL_SEARCH_TOOL_NAME
+			? CLIENT_TOOL_SEARCH_REFERENCE_NAME
+			: toolName;
+	}
+
+	private _toToolSearchCandidates(availableTools: readonly CurrentToolMetadata[] | undefined): readonly IToolSearchCandidate[] {
+		return (availableTools ?? [])
+			.filter(tool => tool.deferLoading)
+			.map(tool => ({
+				name: tool.name,
+				description: tool.description,
+				...(tool.input_schema ? { inputSchema: tool.input_schema } : {}),
+			}));
+	}
+
+	private _emitToolSearchReady(toolCallId: string, candidates: readonly IToolSearchCandidate[]): void {
+		const tracked = this._activeToolCalls.get(toolCallId);
+		if (!tracked) {
+			throw new Error(`Tool-search call '${toolCallId}' was not tracked.`);
+		}
+		this._emitAction({
+			type: ActionType.ChatToolCallReady,
+			turnId: this._turnId,
+			toolCallId,
+			invocationMessage: getInvocationMessage(tracked.toolName, tracked.displayName, tracked.parameters),
+			toolInput: getToolInputString(tracked.toolName, tracked.parameters, tracked.parameters ? tryStringify(tracked.parameters) : undefined),
+			confirmed: ToolCallConfirmationReason.NotNeeded,
+			_meta: toToolCallMeta({ ...(tracked.meta ?? {}), toolSearchCandidates: candidates }),
+		}, tracked.parentToolCallId);
+	}
+
+	private _toolSearchFailure(message: string): ToolResultObject {
+		return { textResultForLlm: message, resultType: 'failure', error: message, toolReferences: [] };
+	}
+
+	private _toToolSearchResult(clientResult: ToolResultObject, availableTools: readonly CurrentToolMetadata[] | undefined): ToolResultObject {
+		const deferred = new Set<string>();
+		for (const tool of availableTools ?? []) {
+			if (tool.deferLoading) {
+				deferred.add(tool.name);
+				if (tool.namespacedName) {
+					deferred.add(tool.namespacedName);
 				}
-			},
-		}));
+			}
+		}
+		const clientNames = this._parseToolSearchNames(clientResult.textResultForLlm);
+		const toolReferences = clientNames.filter(name => deferred.has(name));
+		this._logService.info(`[Copilot:${this.sessionId}] tool_search override: availableTools=${availableTools?.length ?? 0}, deferred=${deferred.size}, clientMatched=[${clientNames.join(', ')}] -> toolReferences=[${toolReferences.join(', ')}]`);
+		return { ...clientResult, toolReferences };
+	}
+
+	private _parseToolSearchNames(text: string): string[] {
+		try {
+			const parsed = JSON.parse(text);
+			return Array.isArray(parsed) ? parsed.filter((name): name is string => typeof name === 'string') : [];
+		} catch {
+			return [];
+		}
 	}
 
 	/**
@@ -2095,7 +2216,7 @@ export class CopilotAgentSession extends Disposable {
 
 			if (request.kind === 'custom-tool'
 				&& typeof request.toolName === 'string'
-				&& this._clientToolNames.has(request.toolName)
+				&& this._clientToolNames.has(this._clientToolName(request.toolName))
 				&& this._pendingClientToolCalls.hasBufferedResult(toolCallId)
 			) {
 				this._logService.info(`[Copilot:${this.sessionId}] Auto-approving client tool ${request.toolName} because its result arrived before the permission request`);
@@ -3028,8 +3149,9 @@ export class CopilotAgentSession extends Disposable {
 			const subagentMeta = toolKind === 'subagent' ? getSubagentMetadata(parameters) : undefined;
 
 			let contributor: { readonly kind: ToolCallContributorKind.Client; readonly clientId: string } | { readonly kind: ToolCallContributorKind.MCP; readonly customizationId: string } | undefined;
-			const isClientTool = this._clientToolNames.has(e.data.toolName);
-			const ownerClientId = isClientTool ? this._activeClientToolSet.ownerOf(e.data.toolName, this._currentTurn?.senderClientId) : undefined;
+			const clientToolName = this._clientToolName(e.data.toolName);
+			const isClientTool = this._clientToolNames.has(clientToolName);
+			const ownerClientId = isClientTool ? this._activeClientToolSet.ownerOf(clientToolName, this._currentTurn?.senderClientId) : undefined;
 			if (ownerClientId) {
 				contributor = { kind: ToolCallContributorKind.Client, clientId: ownerClientId };
 			} else if (e.data.mcpServerName) {
@@ -3086,6 +3208,9 @@ export class CopilotAgentSession extends Disposable {
 				contributor,
 				_meta: toToolCallMeta(meta),
 			}, parentToolCallId);
+			if (e.data.toolName === RUNTIME_TOOL_SEARCH_TOOL_NAME && clientToolName === CLIENT_TOOL_SEARCH_REFERENCE_NAME) {
+				this._pendingClientToolStarts.respondOrBuffer(e.data.toolCallId, true);
+			}
 
 			// No client is connected to run this client tool. Fail it
 			// immediately instead of leaving it pending until the

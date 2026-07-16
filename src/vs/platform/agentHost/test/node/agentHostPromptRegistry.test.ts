@@ -18,12 +18,13 @@ import '../../node/copilot/prompts/allPrompts.js';
  * Builds a prompt context backed by an in-memory bag of customization settings
  * and an optional set of available tool names.
  */
-function context(settings: SchemaValues<typeof copilotCliConfigSchema.definition> = {}, tools: readonly string[] = [], workspaceless = false): IAgentHostPromptContext {
+function context(settings: SchemaValues<typeof copilotCliConfigSchema.definition> = {}, tools: readonly string[] = [], workspaceless = false, toolSearchActive = false): IAgentHostPromptContext {
 	const toolNames = new Set(tools);
 	return {
 		getSetting: key => settings[key],
 		hasClientTool: name => toolNames.has(name),
 		workspaceless,
+		toolSearchActive,
 	};
 }
 
