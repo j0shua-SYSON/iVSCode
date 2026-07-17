@@ -556,8 +556,15 @@ export class CopilotSessionLauncher implements ICopilotSessionLauncher {
 		const instructionDirectories = toSdkInstructionDirectories(plugins.flatMap(p => p.instructions));
 		const model = plan.kind === 'create' ? plan.model : plan.fallback.model;
 		const clientToolNames = clientToolNamesFromSnapshot(plan.snapshot);
+		// Prompt routing and capability decisions use the family-aliased
+		// selection; the wire model id in _createSession comes from plan.model
+		// and is unaffected.
+		const effectiveModel = applyModelFamilyAlias(model, this._configurationService.getRootValue(copilotCliConfigSchema, CopilotCliConfigKey.ModelCapabilityOverrides));
+		if (model && effectiveModel !== model) {
+			this._logService.info(`[Copilot:${plan.sessionId}] Model capability override: routing prompt for '${model.id}' as family '${effectiveModel?.id}'`);
+		}
 		const toolSearchActive = this._configurationService.getRootValue(copilotCliConfigSchema, CopilotCliConfigKey.ToolSearchEnabled) === true
-			&& agentHostModelSupportsToolSearch(model?.id)
+			&& agentHostModelSupportsToolSearch(effectiveModel?.id)
 			&& clientToolNames.has(CLIENT_TOOL_SEARCH_REFERENCE_NAME);
 		const promptContext: IAgentHostPromptContext = {
 			getSetting: key => this._configurationService.getRootValue(copilotCliConfigSchema, key),
@@ -565,12 +572,6 @@ export class CopilotSessionLauncher implements ICopilotSessionLauncher {
 			workspaceless: plan.workspaceless === true,
 			toolSearchActive,
 		};
-		// Prompt routing uses the family-aliased selection; the wire model id in
-		// _createSession comes from plan.model and is unaffected.
-		const effectiveModel = applyModelFamilyAlias(model, this._configurationService.getRootValue(copilotCliConfigSchema, CopilotCliConfigKey.ModelCapabilityOverrides));
-		if (model && effectiveModel !== model) {
-			this._logService.info(`[Copilot:${plan.sessionId}] Model capability override: routing prompt for '${model.id}' as family '${effectiveModel?.id}'`);
-		}
 		// Resolved once per (re)launch — the SDK has no mid-session system-message
 		// update, so this reflects the model/tools/settings at launch time. Log a
 		// summary at info for prompt observability; the full config at trace.

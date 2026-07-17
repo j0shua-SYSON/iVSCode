@@ -30,7 +30,7 @@ import { AgentProvider, AgentSession, CODEX_AGENT_PROVIDER_ID, type IAgentConnec
 import { agentHostAuthority } from '../../../../../../platform/agentHost/common/agentHostUri.js';
 import { AgentFeedbackAttachmentDisplayKind, AgentFeedbackAttachmentMetadataKey } from '../../../../../../platform/agentHost/common/meta/agentFeedbackAttachments.js';
 import { BrowserViewAttachmentDisplayKind, BrowserViewAttachmentMetadataKey } from '../../../../../../platform/agentHost/common/meta/browserViewAttachments.js';
-import { readToolCallMeta } from '../../../../../../platform/agentHost/common/meta/agentToolCallMeta.js';
+import { readToolCallMeta, toToolCallMeta } from '../../../../../../platform/agentHost/common/meta/agentToolCallMeta.js';
 import { readCompletionAttachmentMeta } from '../../../../../../platform/agentHost/common/meta/agentCompletionAttachmentMeta.js';
 import { IRemoteAgentHostService } from '../../../../../../platform/agentHost/common/remoteAgentHostService.js';
 import { SessionConfigKey } from '../../../../../../platform/agentHost/common/sessionConfigKeys.js';
@@ -275,6 +275,19 @@ function confirmedReasonToProtocol(reason: ConfirmedReason | undefined): ToolCal
 
 function shouldAutoApproveClientToolCall(toolCall: ToolCallState): boolean {
 	return readToolCallMeta(toolCall).autoApproveBySetting === true;
+}
+
+/**
+ * Returns the tool call's `_meta` with the transient
+ * {@link IToolCallMeta.toolSearchCandidates} corpus removed. Always returns an
+ * object (never `undefined`) so a completion action can force-replace the prior
+ * `_meta` — the reducer keeps the existing bag when an action omits one, so an
+ * explicit empty replacement is what actually drops the candidates.
+ */
+function metaWithoutToolSearchCandidates(source: { readonly _meta?: Record<string, unknown> }): Record<string, unknown> {
+	const meta = toToolCallMeta(readToolCallMeta(source)) ?? {};
+	delete meta['toolSearchCandidates'];
+	return meta;
 }
 
 /**
@@ -2788,11 +2801,22 @@ export class AgentHostSessionHandler extends Disposable implements IChatSessionC
 			const protocolToolCall = part$.get().toolCall;
 			const isProtocolToolCallComplete = protocolToolCall.status === ToolCallStatus.Completed || protocolToolCall.status === ToolCallStatus.Cancelled;
 			if (!isProtocolToolCallComplete) {
+				// The tool-search ready action stashes the (potentially large)
+				// deferred-tool corpus in `_meta.toolSearchCandidates` purely to
+				// seed this invocation. The completion reducer keeps the prior
+				// `_meta` when the action omits one, so without an explicit
+				// replacement the corpus would persist on the completed call and
+				// across reconnects. Carry a candidate-stripped `_meta` on the
+				// tool-search completion to drop it once the search has run.
+				const clearedMeta = toolName === RUNTIME_TOOL_SEARCH_TOOL_NAME
+					? metaWithoutToolSearchCandidates(protocolToolCall)
+					: undefined;
 				this._dispatchAction(opts.backendSession, {
 					type: ActionType.ChatToolCallComplete,
 					turnId: opts.turnId,
 					toolCallId,
 					result: toolResultToProtocol(result ?? { content: [] }, toolName),
+					...(clearedMeta !== undefined ? { _meta: clearedMeta } : {}),
 				}, opts.chatURI);
 			}
 		};

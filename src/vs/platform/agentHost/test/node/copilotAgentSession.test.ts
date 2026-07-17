@@ -4533,6 +4533,37 @@ suite('CopilotAgentSession', () => {
 			assert.deepStrictEqual(unsupported.runtime.createClientSdkTools().map(tool => tool.name), ['my_tool']);
 		});
 
+		test('toolSearch honors a model-family alias so an aliased preview model is treated as supported', async () => {
+			const toolSearchSnapshot: IActiveClientSnapshot = {
+				tools: [
+					{ name: 'toolSearch', description: 'Search tools', inputSchema: { type: 'object', properties: {} } },
+					{ name: 'my_tool', description: 'Regular tool', inputSchema: { type: 'object', properties: {} } },
+				],
+				plugins: [],
+				mcpServers: {},
+			};
+
+			// The raw preview id is unsupported on its own, so tool search stays off.
+			const withoutAlias = await createAgentSession(disposables, {
+				clientSnapshot: toolSearchSnapshot,
+				modelId: 'preview-model-x',
+				rootValues: { [CopilotCliConfigKey.ToolSearchEnabled]: true },
+			});
+			assert.deepStrictEqual(withoutAlias.runtime.createClientSdkTools().map(tool => tool.name), ['my_tool']);
+
+			// Aliasing it to a tool-search-capable family enables tool search, matching
+			// the prompt/capability routing the launcher applies from the same override.
+			const withAlias = await createAgentSession(disposables, {
+				clientSnapshot: toolSearchSnapshot,
+				modelId: 'preview-model-x',
+				rootValues: {
+					[CopilotCliConfigKey.ToolSearchEnabled]: true,
+					[CopilotCliConfigKey.ModelCapabilityOverrides]: { 'preview-model-x': { family: 'claude-opus-4.8' } },
+				},
+			});
+			assert.deepStrictEqual(withAlias.runtime.createClientSdkTools().map(tool => tool.name), ['tool_search_tool', 'my_tool']);
+		});
+
 		test('agent-coordination client tools auto-ready with a tailored invocation message', async () => {
 			const agentSnapshot: IActiveClientSnapshot = {
 				tools: [{ name: 'list_agents', description: 'List agents', inputSchema: { type: 'object', properties: {} } }],
