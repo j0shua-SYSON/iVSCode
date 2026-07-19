@@ -79,6 +79,14 @@ if [ -d "$parcel_root" ]; then
 	find "$parcel_root" -mindepth 1 -maxdepth 1 -type d -name 'watcher-*' \
 		-exec rm -rf -- {} +
 fi
+# node-gyp leaves duplicate linker inputs and platform-specific intermediate
+# modules below obj.target. They are not runtime payloads, and some are not
+# valid Node entry points on Linux (for example deviceid's windows.node).
+find \
+	/workspace/remote/node_modules \
+	/workspace/extensions/git/node_modules \
+	-type d -path '*/build/Release/obj.target' -prune \
+	-exec rm -rf -- {} +
 node - <<'NODE'
 const { createRequire } = require('node:module');
 const { readdirSync } = require('node:fs');
