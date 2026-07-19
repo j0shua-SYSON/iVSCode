@@ -22,7 +22,8 @@ for tool in curl git python3 shasum xcodebuild; do
 done
 
 xcode_version="$(xcodebuild -version | head -n 1)"
-[[ "$xcode_version" == "Xcode 26.0" ]] || fail "selected toolchain is $xcode_version, expected Xcode 26.0"
+[[ "$xcode_version" =~ ^Xcode\ 26\.0(\.[0-9]+)?$ ]] || \
+	fail "selected toolchain is $xcode_version, expected the Xcode 26.0 patch train"
 
 [[ $# -eq 1 ]] || {
 	usage
