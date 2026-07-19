@@ -438,6 +438,7 @@ jobs:
           bash ios/scripts/stage-runtime.sh \
             --engine "$GITHUB_WORKSPACE/.build/runtime/engine" \
             --guest "$GITHUB_WORKSPACE/.build/runtime/guest/ivscode-alpine-aarch64.tar.zst"
+          test -x ios/iVSCode/Generated/Runtime/Frameworks/glib-2.0.0.framework/glib-2.0.0
 
       - name: Select the pinned project generator
         shell: bash
@@ -471,6 +472,8 @@ jobs:
           -derivedDataPath ios/.build/DerivedData-Full
           -clonedSourcePackagesDirPath ios/.build/SourcePackages
           CODE_SIGNING_ALLOWED=NO
+          FRAMEWORK_SEARCH_PATHS="$GITHUB_WORKSPACE/ios/iVSCode/Generated/Runtime/Frameworks"
+          OTHER_LDFLAGS='$(inherited) -framework glib-2.0.0'
           IVSCODE_REQUIRE_RUNTIME=1
           build
 

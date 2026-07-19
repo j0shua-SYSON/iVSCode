@@ -180,6 +180,7 @@ jobs:
           -derivedDataPath ios/.build/DerivedData-Native
           -clonedSourcePackagesDirPath ios/.build/SourcePackages
           CODE_SIGNING_ALLOWED=NO
+          OTHER_LDFLAGS='$(inherited) -Wl,-undefined,dynamic_lookup'
           build
 
   build:
@@ -246,6 +247,7 @@ jobs:
           -derivedDataPath ios/.build/DerivedData-Device
           -clonedSourcePackagesDirPath ios/.build/SourcePackages
           CODE_SIGNING_ALLOWED=NO
+          OTHER_LDFLAGS='$(inherited) -Wl,-undefined,dynamic_lookup'
           build
 
       - name: Verify the packaged workbench contract
