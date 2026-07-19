@@ -74,6 +74,55 @@ npm ci --foreground-scripts
 cd /workspace/extensions/git
 rm -rf /workspace/extensions/git/node_modules
 npm ci --foreground-scripts
+parcel_root=/workspace/remote/node_modules/@parcel
+if [ -d "$parcel_root" ]; then
+	find "$parcel_root" -mindepth 1 -maxdepth 1 -type d -name 'watcher-*' \
+		-exec rm -rf -- {} +
+fi
+node - <<'NODE'
+const { createRequire } = require('node:module');
+const { readdirSync } = require('node:fs');
+const path = require('node:path');
+
+const remoteRequire = createRequire('/workspace/remote/package.json');
+for (const name of [
+	'@parcel/watcher',
+	'@vscode/deviceid',
+	'@vscode/fs-copyfile',
+	'@vscode/native-watchdog',
+	'@vscode/spdlog',
+	'@vscode/sqlite3',
+	'kerberos',
+	'node-pty'
+]) {
+	remoteRequire(name);
+	process.stdout.write(`loaded Alpine package ${name}\n`);
+}
+
+const gitRequire = createRequire('/workspace/extensions/git/package.json');
+gitRequire('@vscode/fs-copyfile');
+process.stdout.write('loaded Alpine extensions/git package @vscode/fs-copyfile\n');
+
+let nativeCount = 0;
+function loadNativeTree(root) {
+	for (const entry of readdirSync(root, { withFileTypes: true })) {
+		const candidate = path.join(root, entry.name);
+		if (entry.isDirectory()) {
+			loadNativeTree(candidate);
+		} else if (entry.isFile() && entry.name.endsWith('.node')) {
+			require(candidate);
+			nativeCount++;
+			process.stdout.write(`loaded Alpine native binding ${candidate}\n`);
+		}
+	}
+}
+
+loadNativeTree('/workspace/remote/node_modules');
+loadNativeTree('/workspace/extensions/git/node_modules');
+if (nativeCount === 0) {
+	throw new Error('Alpine dependency rebuild produced no native bindings');
+}
+NODE
 IVSCODE_ALPINE_BUILD
 )"
 sh -n -c "$container_script"
@@ -108,8 +157,8 @@ for native_root in "${native_roots[@]}"; do
 		native_count=$((native_count + 1))
 		readelf --file-header "$addon" | grep -Eq 'Machine:[[:space:]]+AArch64' || \
 			fail "native addon is not AArch64: $addon"
-		if readelf --version-info "$addon" 2>/dev/null | grep -q 'GLIBC_'; then
-			fail "glibc symbol version leaked into Alpine addon: $addon"
+		if readelf --dynamic "$addon" 2>/dev/null | grep -Eq 'Shared library: \[libc\.so\.6\]'; then
+			fail "glibc runtime dependency leaked into Alpine addon: $addon"
 		fi
 	done < <(find "$native_root" -type f -name '*.node' -print0)
 done
