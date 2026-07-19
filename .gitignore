@@ -48,3 +48,9 @@ dist
 .github/prompts/*.local.prompt.md
 .agents/skills/.local/
 .github/skills/.local/
+
+# iVSCode iOS build products (generated on GitHub-hosted macOS runners)
+/ios/iVSCode.xcodeproj/
+/ios/iVSCode/Generated/Workbench/*
+!/ios/iVSCode/Generated/Workbench/.gitkeep
+/ios/.build/

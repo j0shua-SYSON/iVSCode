@@ -1,0 +1,155 @@
+name: iVSCode iOS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ios-port
+    paths:
+      - '.github/workflows/ivscode-ios.yml'
+      - '.nvmrc'
+      - 'build/**'
+      - 'extensions/**'
+      - 'ios/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'product.json'
+      - 'remote/web/**'
+      - 'src/**'
+  pull_request:
+    paths:
+      - '.github/workflows/ivscode-ios.yml'
+      - '.nvmrc'
+      - 'build/**'
+      - 'extensions/**'
+      - 'ios/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'product.json'
+      - 'remote/web/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ivscode-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Web workbench and unsigned iOS app
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    env:
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.build/npm-cache
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.build/playwright
+      TMPDIR: ${{ github.workspace }}/.build/tmp/
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep all mutable build state in the workspace
+        run: mkdir -p "$NPM_CONFIG_CACHE" "$PLAYWRIGHT_BROWSERS_PATH" "$TMPDIR" "$XDG_CACHE_HOME" ios/.build
+
+      - name: Select repository Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install repository dependencies
+        run: npm ci
+
+      - name: Build the production browser workbench
+        run: npm run gulp vscode-web-min
+
+      - name: Stage the iVSCode workbench
+        run: node ios/scripts/package-workbench.mjs --source ../vscode-web
+
+      - name: Select the pinned project generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$GITHUB_WORKSPACE/.build/xcodegen.zip"
+          destination="$GITHUB_WORKSPACE/.build/xcodegen"
+          curl --fail --location --retry 3 \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip \
+            --output "$archive"
+          echo '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  '"$archive" | shasum -a 256 --check
+          ditto -x -k "$archive" "$destination"
+          echo "$destination/bin" >> "$GITHUB_PATH"
+
+      - name: Report the Apple toolchain
+        run: |
+          xcodebuild -version
+          xcodegen --version
+
+      - name: Generate the Xcode project
+        run: xcodegen generate --spec ios/project.yml
+
+      - name: Build for the iOS Simulator
+        run: >-
+          xcodebuild
+          -project ios/iVSCode.xcodeproj
+          -scheme iVSCode
+          -configuration Release
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath ios/.build/DerivedData-Simulator
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Build the unsigned device app
+        run: >-
+          xcodebuild
+          -project ios/iVSCode.xcodeproj
+          -scheme iVSCode
+          -configuration Release
+          -destination 'generic/platform=iOS'
+          -derivedDataPath ios/.build/DerivedData-Device
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Verify the packaged workbench contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          app='ios/.build/DerivedData-Device/Build/Products/Release-iphoneos/iVSCode.app'
+          test -d "$app"
+          test -f "$app/Workbench/index.html"
+          test -f "$app/Workbench/ivscode.bootstrap.js"
+          test -f "$app/Workbench/out/nls.messages.js"
+          test -f "$app/Workbench/out/vs/workbench/workbench.web.main.internal.js"
+          test -f "$app/Workbench/out/vs/workbench/workbench.web.main.internal.css"
+          test -d "$app/Workbench/extensions/code-mobile"
+          plutil -lint "$app/Info.plist"
+          du -sh "$app" "$app/Workbench"
+
+      - name: Package an unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root='ios/.build/package'
+          app='ios/.build/DerivedData-Device/Build/Products/Release-iphoneos/iVSCode.app'
+          mkdir -p "$package_root/Payload"
+          ditto "$app" "$package_root/Payload/iVSCode.app"
+          (
+            cd "$package_root"
+            /usr/bin/zip -qry ../iVSCode-unsigned.ipa Payload
+          )
+          shasum -a 256 ios/.build/iVSCode-unsigned.ipa
+
+      - name: Upload the unsigned app
+        uses: actions/upload-artifact@v4
+        with:
+          name: iVSCode-unsigned-${{ github.sha }}
+          path: |
+            ios/.build/iVSCode-unsigned.ipa
+            ios/iVSCode/Generated/Workbench/ivscode-build.json
+          if-no-files-found: error
+          retention-days: 14

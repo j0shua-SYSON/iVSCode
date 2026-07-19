@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "engine": "UTM-SE",
+    "upstream": "https://github.com/utmapp/UTM.git",
+    "version": "4.7.5",
+    "commit": "048ca7498ea3a374439149d51739d94c5300bcda",
+    "executionMode": "tci",
+    "jitRequired": false
+  },
+  "guest": {
+    "architecture": "aarch64",
+    "machine": "virt",
+    "cpuCount": 2,
+    "memoryMiB": 768,
+    "distribution": "alpine",
+    "display": "none",
+    "workspaceMount": "/workspace",
+    "serverPort": 8000
+  },
+  "vscode": {
+    "buildTask": "vscode-reh-web-alpine-arm64-min",
+    "serverRoot": "/opt/ivscode/server",
+    "dataRoot": "/workspace/.ivscode-server",
+    "listenAddress": "127.0.0.1",
+    "connectionToken": "ephemeral"
+  }
+}

@@ -1,3 +1,16 @@
+# iVSCode
+
+This fork is building a full, on-device iPhone and iPad port of Code - OSS. The
+iOS shell, app-container workspace provider, Linux runtime contract, and hosted
+Apple build live under [`ios/`](ios/README.md). Port development happens on the
+`ios-port` branch and is verified with GitHub Actions rather than a local Apple
+toolchain.
+
+iVSCode preserves the upstream Code - OSS architecture and license. It is an
+independent project and is not an official Microsoft or Apple product.
+
+---
+
 # Visual Studio Code - Open Source ("Code - OSS")
 [![Feature Requests](https://img.shields.io/github/issues/microsoft/vscode/feature-request.svg)](https://github.com/microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc)
 [![Bugs](https://img.shields.io/github/issues/microsoft/vscode/bug.svg)](https://github.com/microsoft/vscode/issues?utf8=✓&q=is%3Aissue+is%3Aopen+label%3Abug)
