@@ -87,6 +87,13 @@ find \
 	/workspace/extensions/git/node_modules \
 	-type d -path '*/build/Release/obj.target' -prune \
 	-exec rm -rf -- {} +
+# These packages intentionally produce empty Windows targets when node-gyp
+# evaluates their binding files on Linux. Their JavaScript entry points do not
+# load these files on Alpine, so exclude the unusable platform payloads.
+rm -f \
+	/workspace/remote/node_modules/@vscode/deviceid/build/Release/windows.node \
+	/workspace/remote/node_modules/@vscode/windows-process-tree/build/Release/windows_process_tree.node \
+	/workspace/remote/node_modules/@vscode/windows-registry/build/Release/winregistry.node
 node - <<'NODE'
 const { createRequire } = require('node:module');
 const { readdirSync } = require('node:fs');
