@@ -2,6 +2,7 @@
 
 import AppKit
 import Foundation
+import ImageIO
 
 guard CommandLine.arguments.count == 3 else {
 	fputs("usage: generate-app-icon.swift source.png output.png\n", stderr)
@@ -10,23 +11,26 @@ guard CommandLine.arguments.count == 3 else {
 
 let sourceURL = URL(fileURLWithPath: CommandLine.arguments[1])
 let outputURL = URL(fileURLWithPath: CommandLine.arguments[2])
-guard let source = NSImage(contentsOf: sourceURL),
-	let bitmap = NSBitmapImageRep(
-		bitmapDataPlanes: nil,
-		pixelsWide: 1024,
-		pixelsHigh: 1024,
-		bitsPerSample: 8,
-		samplesPerPixel: 3,
-		hasAlpha: false,
-		isPlanar: false,
-		colorSpaceName: .deviceRGB,
-		bytesPerRow: 0,
-		bitsPerPixel: 24
-	),
-	let context = NSGraphicsContext(bitmapImageRep: bitmap) else {
-	fputs("error: could not create the app icon canvas\n", stderr)
+guard let source = NSImage(contentsOf: sourceURL) else {
+	fputs("error: could not decode the reviewed Code - OSS icon\n", stderr)
 	exit(1)
 }
+
+let colorSpace = CGColorSpaceCreateDeviceRGB()
+let bitmapInfo = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.noneSkipLast.rawValue
+guard let bitmapContext = CGContext(
+	data: nil,
+	width: 1024,
+	height: 1024,
+	bitsPerComponent: 8,
+	bytesPerRow: 4 * 1024,
+	space: colorSpace,
+	bitmapInfo: bitmapInfo
+) else {
+	fputs("error: could not allocate the opaque app icon canvas\n", stderr)
+	exit(1)
+}
+let context = NSGraphicsContext(cgContext: bitmapContext, flipped: false)
 
 NSGraphicsContext.saveGraphicsState()
 NSGraphicsContext.current = context
@@ -90,13 +94,18 @@ badgeText.draw(
 context.flushGraphics()
 NSGraphicsContext.restoreGraphicsState()
 
-guard let png = bitmap.representation(using: .png, properties: [.compressionFactor: 1]) else {
-	fputs("error: could not encode the app icon\n", stderr)
+guard let image = bitmapContext.makeImage(),
+	let destination = CGImageDestinationCreateWithURL(
+		outputURL as CFURL,
+		"public.png" as CFString,
+		1,
+		nil
+	) else {
+	fputs("error: could not prepare the app icon encoder\n", stderr)
 	exit(1)
 }
-do {
-	try png.write(to: outputURL, options: .atomic)
-} catch {
-	fputs("error: could not write the app icon: \(error.localizedDescription)\n", stderr)
+CGImageDestinationAddImage(destination, image, nil)
+guard CGImageDestinationFinalize(destination) else {
+	fputs("error: could not encode the app icon\n", stderr)
 	exit(1)
 }
