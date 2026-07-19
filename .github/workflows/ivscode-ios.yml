@@ -63,10 +63,17 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Install the Linux native build requirement
+      - name: Install the Linux native build requirements
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libkrb5-dev
+          sudo apt-get install --yes \
+            build-essential \
+            libkrb5-dev \
+            libnotify-bin \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config
 
       - name: Install repository dependencies
         env:

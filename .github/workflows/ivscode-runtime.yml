@@ -108,8 +108,10 @@ jobs:
           set -euo pipefail
           brew uninstall cmake
           brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson
-          pip3 install --user six pyparsing
+          python3 -m venv "$GITHUB_WORKSPACE/.build/utm-python"
+          "$GITHUB_WORKSPACE/.build/utm-python/bin/python" -m pip install six pyparsing
           rm -f /usr/local/lib/pkgconfig/*.pc
+          echo "$GITHUB_WORKSPACE/.build/utm-python/bin" >> "$GITHUB_PATH"
           echo '/usr/local/opt/bison/bin' >> "$GITHUB_PATH"
           echo '/opt/homebrew/opt/bison/bin' >> "$GITHUB_PATH"
 
@@ -188,7 +190,16 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install --yes e2fsprogs libkrb5-dev zstd
+          sudo apt-get install --yes \
+            build-essential \
+            e2fsprogs \
+            libkrb5-dev \
+            libnotify-bin \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config \
+            zstd
           npm ci
 
       - name: Compile the mangled server sources
