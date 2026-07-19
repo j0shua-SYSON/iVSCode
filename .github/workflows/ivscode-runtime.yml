@@ -338,7 +338,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run gulp clean-extensions-build
+          rm -rf .build/extensions
           npm run gulp compile-non-native-extensions-build
           npm run gulp compile-copilot-extension-build
           npm run gulp compile-extension-media-build
