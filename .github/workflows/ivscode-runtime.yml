@@ -450,7 +450,7 @@ jobs:
             --output "$archive"
           echo '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  '"$archive" | shasum -a 256 --check
           ditto -x -k "$archive" "$destination"
-          xcodegen_binary="$(find "$destination" -name xcodegen -print -quit)"
+          xcodegen_binary="$(find "$destination" -type f -name xcodegen -print -quit)"
           [[ -f "$xcodegen_binary" ]] || { echo 'XcodeGen binary is missing from the pinned archive' >&2; exit 1; }
           chmod +x "$xcodegen_binary"
           echo "$(dirname "$xcodegen_binary")" >> "$GITHUB_PATH"
