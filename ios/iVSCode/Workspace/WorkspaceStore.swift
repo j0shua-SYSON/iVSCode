@@ -159,8 +159,11 @@ final class WorkspaceStore {
 		guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
 			throw WorkspaceStoreError.notFound
 		}
-		if isDirectory.boolValue && !recursive && !(try fileManager.contentsOfDirectory(atPath: url.path)).isEmpty {
-			throw WorkspaceStoreError.directoryNotEmpty
+		if isDirectory.boolValue && !recursive {
+			let children = try fileManager.contentsOfDirectory(atPath: url.path)
+			if !children.isEmpty {
+				throw WorkspaceStoreError.directoryNotEmpty
+			}
 		}
 		try fileManager.removeItem(at: url)
 		bumpRevision()
