@@ -70,6 +70,11 @@ docker run --rm \
 		export npm_config_nodedir=/usr
 		export npm_config_runtime=node
 		export npm_config_target="$(node --print process.versions.node)"
+		# Alpine enables LTO in Node's config.gypi. Addons inherit those flags,
+		# but GCC 15 cannot link spdlog's bundled fmt through fortified stdio.
+		export CFLAGS="${CFLAGS:-} -fno-lto"
+		export CXXFLAGS="${CXXFLAGS:-} -fno-lto"
+		export LDFLAGS="${LDFLAGS:-} -fno-lto"
 		npm install --global node-gyp-build
 		rm -rf /workspace/remote/node_modules
 		npm ci --foreground-scripts
