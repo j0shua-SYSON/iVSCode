@@ -81,7 +81,42 @@ headless_flags = platform_flags[:-1] + ' --disable-spice --disable-vnc --disable
 count = text.count(platform_flags)
 if count != 1:
     raise SystemExit(f"expected exactly one reviewed iOS QEMU flag set, found {count}")
-path.write_text(text.replace(platform_flags, headless_flags), encoding="utf-8")
+text = text.replace(platform_flags, headless_flags)
+
+# UTM fixed these Objective-C flag mappings after 4.7.5. Without the target
+# tuple in OBJCFLAGS, dependencies can be compiled against the build SDK rather
+# than iVSCode's supported deployment target.
+meson_objc_cflags = 'echo "objc_args = [${CFLAGS:+$(meson_quote $CFLAGS)}]" >> $cross'
+meson_objc_objcflags = 'echo "objc_args = [${OBJCFLAGS:+$(meson_quote $OBJCFLAGS)}]" >> $cross'
+count = text.count(meson_objc_cflags)
+if count != 1:
+    raise SystemExit(f"expected exactly one Meson Objective-C CFLAGS mapping, found {count}")
+text = text.replace(meson_objc_cflags, meson_objc_objcflags)
+
+cmake_objc_cflags = '''    if [ -n "$CFLAGS" ]; then
+        echo "set(CMAKE_C_FLAGS \\"$CFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
+        echo "set(CMAKE_OBJC_FLAGS \\"$CFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
+    fi'''
+cmake_objc_objcflags = '''    if [ -n "$CFLAGS" ]; then
+        echo "set(CMAKE_C_FLAGS \\"$CFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
+    fi
+
+    if [ -n "$OBJCFLAGS" ]; then
+        echo "set(CMAKE_OBJC_FLAGS \\"$OBJCFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
+    fi'''
+count = text.count(cmake_objc_cflags)
+if count != 1:
+    raise SystemExit(f"expected exactly one CMake Objective-C CFLAGS mapping, found {count}")
+text = text.replace(cmake_objc_cflags, cmake_objc_objcflags)
+
+upstream_minimum = 'IOS_SDKMINVER="11.0"'
+ivscode_minimum = 'IOS_SDKMINVER="17.0"'
+count = text.count(upstream_minimum)
+if count != 1:
+    raise SystemExit(f"expected exactly one reviewed iOS deployment target, found {count}")
+text = text.replace(upstream_minimum, ivscode_minimum)
+
+path.write_text(text, encoding="utf-8")
 PY
 
 archive="$scratch/qemu-10.0.2-utm.tar.xz"
