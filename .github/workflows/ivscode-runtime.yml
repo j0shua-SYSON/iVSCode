@@ -158,6 +158,7 @@ jobs:
       TMPDIR: ${{ github.workspace }}/.build/tmp/
       XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
       GUEST_ARTIFACT: ${{ github.workspace }}/.build/runtime/ivscode-alpine-aarch64.tar.zst
+      VSCODE_SKIP_BUILD_TSGO: '1'
 
     steps:
       - name: Check out iVSCode
@@ -201,6 +202,16 @@ jobs:
             pkg-config \
             zstd
           npm ci
+
+      - name: Type-check with native TypeScript
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        run: >-
+          node --max-old-space-size=8192
+          node_modules/@typescript/native/bin/tsc
+          --project src/tsconfig.json
+          --pretty false
+          --noEmit
 
       - name: Compile the mangled server sources
         if: steps.guest-cache.outputs.cache-hit != 'true'

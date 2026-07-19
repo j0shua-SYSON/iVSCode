@@ -166,7 +166,11 @@ export function compileTask(src: string, out: string, build: boolean, options: {
 			.pipe(compile())
 			.pipe(gulp.dest(out)));
 
-		const typecheck = spawnTsgo(compile.projectPath, { taskName: `compile-${path.basename(src)}`, noEmit: true });
+		// Resource-constrained CI can run the native TypeScript check as a separate
+		// process before this task to avoid peaking two full compiler heaps at once.
+		const typecheck = process.env['VSCODE_SKIP_BUILD_TSGO']
+			? Promise.resolve()
+			: spawnTsgo(compile.projectPath, { taskName: `compile-${path.basename(src)}`, noEmit: true });
 
 		await Promise.all([emit, typecheck]);
 	};

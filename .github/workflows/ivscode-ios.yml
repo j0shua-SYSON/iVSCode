@@ -47,6 +47,7 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.build/playwright
       TMPDIR: ${{ github.workspace }}/.build/tmp/
       XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+      VSCODE_SKIP_BUILD_TSGO: '1'
 
     steps:
       - name: Check out iVSCode
@@ -81,6 +82,15 @@ jobs:
           # requests are too easy to rate-limit on shared hosted runners.
           GITHUB_TOKEN: ${{ github.token }}
         run: npm ci
+
+      - name: Type-check with native TypeScript
+        timeout-minutes: 15
+        run: >-
+          node --max-old-space-size=8192
+          node_modules/@typescript/native/bin/tsc
+          --project src/tsconfig.json
+          --pretty false
+          --noEmit
 
       - name: Compile the mangled production workbench
         timeout-minutes: 20
