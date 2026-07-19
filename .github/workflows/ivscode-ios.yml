@@ -37,10 +37,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Web workbench and unsigned iOS app
-    runs-on: macos-26
-    timeout-minutes: 120
+  web:
+    name: Production web workbench
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     env:
       NPM_CONFIG_CACHE: ${{ github.workspace }}/.build/npm-cache
@@ -70,11 +70,69 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: npm ci
 
-      - name: Build the production browser workbench
-        run: npm run gulp vscode-web-min
+      - name: Compile the mangled production workbench
+        timeout-minutes: 20
+        run: npm run gulp compile-build-with-mangling
+
+      - name: Package the minimized browser workbench
+        timeout-minutes: 30
+        run: npm run gulp vscode-web-min-ci
 
       - name: Stage the iVSCode workbench
         run: node ios/scripts/package-workbench.mjs --source ../vscode-web
+
+      - name: Verify the staged workbench
+        shell: bash
+        run: |
+          set -euo pipefail
+          workbench='ios/iVSCode/Generated/Workbench'
+          test -f "$workbench/index.html"
+          test -f "$workbench/ivscode.bootstrap.js"
+          test -f "$workbench/out/nls.messages.js"
+          test -f "$workbench/out/vs/workbench/workbench.web.main.internal.js"
+          test -f "$workbench/out/vs/workbench/workbench.web.main.internal.css"
+          test -d "$workbench/extensions/code-mobile"
+          test -f "$workbench/ivscode-build.json"
+          du -sh "$workbench"
+
+      - name: Archive the workbench for Xcode
+        run: tar -cf ios/.build/iVSCode-Workbench.tar -C ios/iVSCode/Generated/Workbench .
+
+      - name: Upload the workbench
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivscode-workbench-${{ github.sha }}
+          path: ios/.build/iVSCode-Workbench.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  build:
+    name: Web workbench and unsigned iOS app
+    needs: web
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    env:
+      TMPDIR: ${{ github.workspace }}/.build/tmp/
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep all mutable build state in the workspace
+        run: mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" ios/.build ios/iVSCode/Generated/Workbench
+
+      - name: Download the production workbench
+        uses: actions/download-artifact@v4
+        with:
+          name: ivscode-workbench-${{ github.sha }}
+          path: ios/.build
+
+      - name: Expand the production workbench
+        run: tar -xf ios/.build/iVSCode-Workbench.tar -C ios/iVSCode/Generated/Workbench
 
       - name: Select the pinned project generator
         shell: bash
