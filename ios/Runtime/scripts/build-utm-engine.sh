@@ -93,22 +93,6 @@ if count != 1:
     raise SystemExit(f"expected exactly one Meson Objective-C CFLAGS mapping, found {count}")
 text = text.replace(meson_objc_cflags, meson_objc_objcflags)
 
-cmake_objc_cflags = '''    if [ -n "$CFLAGS" ]; then
-        echo "set(CMAKE_C_FLAGS \\"$CFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
-        echo "set(CMAKE_OBJC_FLAGS \\"$CFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
-    fi'''
-cmake_objc_objcflags = '''    if [ -n "$CFLAGS" ]; then
-        echo "set(CMAKE_C_FLAGS \\"$CFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
-    fi
-
-    if [ -n "$OBJCFLAGS" ]; then
-        echo "set(CMAKE_OBJC_FLAGS \\"$OBJCFLAGS\\" CACHE STRING \\"\\" FORCE)" >> "$toolchain"
-    fi'''
-count = text.count(cmake_objc_cflags)
-if count != 1:
-    raise SystemExit(f"expected exactly one CMake Objective-C CFLAGS mapping, found {count}")
-text = text.replace(cmake_objc_cflags, cmake_objc_objcflags)
-
 upstream_minimum = 'IOS_SDKMINVER="11.0"'
 ivscode_minimum = 'IOS_SDKMINVER="17.0"'
 count = text.count(upstream_minimum)
