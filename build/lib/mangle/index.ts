@@ -443,14 +443,6 @@ export class Mangler {
 	async computeNewFileContents(strictImplicitPublicHandling?: Set<string>): Promise<Map<string, MangleOutput>> {
 
 		const service = ts.createLanguageService(new StaticLanguageServiceHost(this.projectPath));
-		const projectDir = path.dirname(this.projectPath);
-		const isProjectFile = (fileName: string): boolean => {
-			const relative = path.relative(projectDir, fileName);
-			return relative !== ''
-				&& relative !== '..'
-				&& !relative.startsWith(`..${path.sep}`)
-				&& !path.isAbsolute(relative);
-		};
 
 		// STEP:
 		// - Find all classes and their field info.
@@ -601,12 +593,6 @@ export class Mangler {
 			}
 		};
 		const appendRename = (newText: string, loc: ts.RenameLocation) => {
-			// The mangle stream only emits files rooted at the TypeScript project.
-			// Rename results can also point into dependency declarations, where
-			// unrelated structural fields may request conflicting replacements.
-			if (!isProjectFile(loc.fileName)) {
-				return;
-			}
 			appendEdit(loc.fileName, {
 				newText: (loc.prefixText || '') + newText + (loc.suffixText || ''),
 				offset: loc.textSpan.start,
@@ -683,11 +669,9 @@ export class Mangler {
 		let savedBytes = 0;
 
 		for (const item of service.getProgram()!.getSourceFiles()) {
-			if (!isProjectFile(item.fileName)) {
-				continue;
-			}
 
 			const { mapRoot, sourceRoot } = service.getProgram()!.getCompilerOptions();
+			const projectDir = path.dirname(this.projectPath);
 			const sourceMapRoot = mapRoot ?? pathToFileURL(sourceRoot ?? projectDir).toString();
 
 			// source maps

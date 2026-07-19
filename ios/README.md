@@ -40,7 +40,8 @@ the equivalent of:
 
 ```sh
 npm ci
-npm run gulp vscode-web-min
+npm run gulp compile-build-without-mangling
+npm run gulp vscode-web-min-ci
 node ios/scripts/package-workbench.mjs --source ../vscode-web
 bash ios/scripts/stage-runtime.sh --engine /artifact/engine --guest /artifact/guest.tar.zst
 xcodegen generate --spec ios/project.yml
@@ -48,6 +49,11 @@ xcodebuild -project ios/iVSCode.xcodeproj -scheme iVSCode \
   -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO \
   IVSCODE_REQUIRE_RUNTIME=1 build
 ```
+
+The supported unmangled build task is deliberate: the current upstream source
+uses dynamic and string-based private-field access that its optional symbol
+mangler cannot rewrite safely. The browser and REH packaging tasks still run
+their production minifiers before either payload is staged.
 
 Generated workbench files and Xcode output are ignored. Signed device and
 TestFlight builds require an Apple team and signing secrets; the default CI path

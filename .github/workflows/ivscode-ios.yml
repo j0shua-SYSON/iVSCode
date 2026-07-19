@@ -48,8 +48,6 @@ jobs:
       TMPDIR: ${{ github.workspace }}/.build/tmp/
       XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
       VSCODE_SKIP_BUILD_TSGO: '1'
-      VSCODE_SERIALIZE_BUILD_MANGLE: '1'
-      VSCODE_MANGLE_WORKERS: '1'
 
     steps:
       - name: Check out iVSCode
@@ -98,9 +96,9 @@ jobs:
         timeout-minutes: 15
         run: cd build && npm run typecheck
 
-      - name: Compile the mangled production workbench
-        timeout-minutes: 120
-        run: npm run gulp compile-build-with-mangling
+      - name: Compile the production workbench without symbol mangling
+        timeout-minutes: 60
+        run: npm run gulp compile-build-without-mangling
 
       - name: Package the minimized browser workbench
         timeout-minutes: 30
