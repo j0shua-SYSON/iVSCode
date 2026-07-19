@@ -5,6 +5,9 @@ set -euo pipefail
 UTM_COMMIT="048ca7498ea3a374439149d51739d94c5300bcda"
 QEMU_URL="https://github.com/utmapp/qemu/releases/download/v10.0.2-utm/qemu-10.0.2-utm.tar.xz"
 QEMU_SHA256="f1d7357547a71ae3339a115d5c8f2b72e3b0089531d67c2aca43326d320ac6ca"
+UPSTREAM_OPENSSL_URL="https://www.openssl.org/source/old/1.1.1/openssl-1.1.1b.tar.gz"
+OPENSSL_URL="https://github.com/openssl/openssl/releases/download/OpenSSL_1_1_1b/openssl-1.1.1b.tar.gz"
+OPENSSL_SHA256="5c557b023230413dfb0756f3137a13e6d726838ccd1430888ad15bfb2b43ea4b"
 UPSTREAM_TARGETS="aarch64-softmmu,i386-softmmu,ppc-softmmu,ppc64-softmmu,riscv64-softmmu,x86_64-softmmu,m68k-softmmu"
 IVSCODE_TARGETS="aarch64-softmmu"
 
@@ -37,8 +40,8 @@ UTM_DIR="$(cd "$UTM_DIR" && pwd -P)"
 actual_commit="$(git -C "$UTM_DIR" rev-parse HEAD)"
 [[ "$actual_commit" == "$UTM_COMMIT" ]] || fail "UTM checkout is $actual_commit, expected $UTM_COMMIT"
 
-if ! git -C "$UTM_DIR" diff --quiet -- scripts/build_dependencies.sh; then
-	fail "scripts/build_dependencies.sh already has tracked changes"
+if ! git -C "$UTM_DIR" diff --quiet -- scripts/build_dependencies.sh patches/sources; then
+	fail "reviewed UTM dependency inputs already have tracked changes"
 fi
 
 sources_file="$UTM_DIR/patches/sources"
@@ -48,17 +51,21 @@ grep -Fq "$QEMU_URL" "$sources_file" || fail "UTM's QEMU source pin no longer ma
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/ivscode-utm.XXXXXX")"
 backup="$scratch/build_dependencies.sh"
+sources_backup="$scratch/sources"
 cp -p "$build_script" "$backup"
+cp -p "$sources_file" "$sources_backup"
 
 cleanup() {
 	cp -p "$backup" "$build_script"
+	cp -p "$sources_backup" "$sources_file"
 	rm -rf "$scratch"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-python3 - "$build_script" "$UPSTREAM_TARGETS" "$IVSCODE_TARGETS" <<'PY'
+python3 - "$build_script" "$UPSTREAM_TARGETS" "$IVSCODE_TARGETS" \
+	"$sources_file" "$UPSTREAM_OPENSSL_URL" "$OPENSSL_URL" <<'PY'
 from pathlib import Path
 import sys
 
@@ -101,17 +108,31 @@ if count != 1:
 text = text.replace(upstream_minimum, ivscode_minimum)
 
 path.write_text(text, encoding="utf-8")
+
+sources_path = Path(sys.argv[4])
+upstream_openssl = sys.argv[5]
+replacement_openssl = sys.argv[6]
+sources = sources_path.read_text(encoding="utf-8")
+count = sources.count(upstream_openssl)
+if count != 1:
+    raise SystemExit(f"expected exactly one reviewed OpenSSL source URL, found {count}")
+sources_path.write_text(sources.replace(upstream_openssl, replacement_openssl), encoding="utf-8")
 PY
 
 archive="$scratch/qemu-10.0.2-utm.tar.xz"
 curl --fail --location --retry 5 --retry-all-errors --output "$archive" "$QEMU_URL"
 printf '%s  %s\n' "$QEMU_SHA256" "$archive" | shasum -a 256 --check
 
+openssl_archive="$scratch/openssl-1.1.1b.tar.gz"
+curl --fail --location --retry 5 --retry-all-errors --output "$openssl_archive" "$OPENSSL_URL"
+printf '%s  %s\n' "$OPENSSL_SHA256" "$openssl_archive" | shasum -a 256 --check
+
 # Seed UTM's normal download location. Its own download() function will unpack
 # this verified archive and apply patches/qemu-10.0.2-utm.patch before build.
 qemu_build_dir="$UTM_DIR/build-iOS-TCI-arm64"
 mkdir -p "$qemu_build_dir"
 cp "$archive" "$qemu_build_dir/qemu-10.0.2-utm.tar.xz"
+cp "$openssl_archive" "$qemu_build_dir/openssl-1.1.1b.tar.gz"
 [[ -f "$UTM_DIR/patches/qemu-10.0.2-utm.patch" ]] || fail "pinned UTM QEMU patch is missing"
 
 printf 'Building UTM iOS-TCI arm64 dependencies at %s\n' "$UTM_COMMIT"

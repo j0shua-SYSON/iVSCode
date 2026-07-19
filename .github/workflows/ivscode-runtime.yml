@@ -161,6 +161,7 @@ jobs:
       GUEST_ARTIFACT: ${{ github.workspace }}/.build/runtime/ivscode-alpine-aarch64.tar.zst
       VSCODE_SKIP_BUILD_TSGO: '1'
       VSCODE_SERIALIZE_BUILD_MANGLE: '1'
+      VSCODE_MANGLE_WORKERS: '1'
 
     steps:
       - name: Check out iVSCode
@@ -217,7 +218,7 @@ jobs:
 
       - name: Compile the mangled server sources
         if: steps.guest-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 25
+        timeout-minutes: 60
         run: npm run gulp compile-build-with-mangling
 
       - name: Rebuild native remote dependencies for Alpine

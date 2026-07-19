@@ -429,9 +429,13 @@ export class Mangler {
 		this.projectPath = projectPath;
 		this.log = log;
 		this.config = config;
+		const requestedWorkers = Number.parseInt(process.env['VSCODE_MANGLE_WORKERS'] ?? '', 10);
+		const maxWorkers = Number.isInteger(requestedWorkers) && requestedWorkers >= 1 && requestedWorkers <= 4
+			? requestedWorkers
+			: 4;
 
 		this.renameWorkerPool = workerpool.pool(path.join(import.meta.dirname, 'renameWorker.ts'), {
-			maxWorkers: 4,
+			maxWorkers,
 			minWorkers: 'max'
 		});
 	}

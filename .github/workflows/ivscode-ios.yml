@@ -40,7 +40,7 @@ jobs:
   web:
     name: Production web workbench
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
 
     env:
       NPM_CONFIG_CACHE: ${{ github.workspace }}/.build/npm-cache
@@ -49,6 +49,7 @@ jobs:
       XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
       VSCODE_SKIP_BUILD_TSGO: '1'
       VSCODE_SERIALIZE_BUILD_MANGLE: '1'
+      VSCODE_MANGLE_WORKERS: '1'
 
     steps:
       - name: Check out iVSCode
@@ -94,7 +95,7 @@ jobs:
           --noEmit
 
       - name: Compile the mangled production workbench
-        timeout-minutes: 20
+        timeout-minutes: 60
         run: npm run gulp compile-build-with-mangling
 
       - name: Package the minimized browser workbench
