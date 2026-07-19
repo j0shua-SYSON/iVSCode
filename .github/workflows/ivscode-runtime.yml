@@ -1,0 +1,238 @@
+name: iVSCode Runtime
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - ios-port
+    paths:
+      - '.github/workflows/ivscode-runtime.yml'
+      - '.nvmrc'
+      - 'build/**'
+      - 'extensions/**'
+      - 'ios/Runtime/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'product.json'
+      - 'remote/**'
+      - 'resources/server/**'
+      - 'src/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ivscode-runtime-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify pinned runtime contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Select repository Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Verify the manifest
+        run: node ios/Runtime/scripts/verify-manifest.mjs
+
+      - name: Parse every runtime shell entry point
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ios/Runtime/scripts/build-utm-engine.sh
+          bash -n ios/Runtime/scripts/collect-framework-closure.sh
+          bash -n ios/Runtime/scripts/build-guest-image.sh
+          bash -n ios/Runtime/guest/etc/init.d/ivscode
+          bash -n ios/Runtime/guest/usr/local/sbin/ivscode-poweroff
+
+  engine:
+    name: No-JIT iOS QEMU engine
+    needs: verify
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    env:
+      TMPDIR: ${{ github.workspace }}/.build/tmp/
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+      UTM_COMMIT: 048ca7498ea3a374439149d51739d94c5300bcda
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep all mutable build state in the workspace
+        run: mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" .build/runtime
+
+      - name: Restore a verified engine closure
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: .build/runtime/engine
+          key: ivscode-engine-${{ runner.os }}-${{ runner.arch }}-${{ env.UTM_COMMIT }}-${{ hashFiles('ios/Runtime/manifest.json', 'ios/Runtime/scripts/build-utm-engine.sh', 'ios/Runtime/scripts/collect-framework-closure.sh') }}
+
+      - name: Check out pinned UTM recursively
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: utmapp/UTM
+          ref: 048ca7498ea3a374439149d51739d94c5300bcda
+          path: .build/UTM
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Select UTM's Apple toolchain
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(xcode-select -p)" == /Applications/Xcode_26.0.app* ]] || \
+            sudo xcode-select -s /Applications/Xcode_26.0.app
+          xcodebuild -version
+
+      - name: Install UTM's hosted build requirements
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew uninstall cmake
+          brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson
+          pip3 install --user six pyparsing
+          rm -f /usr/local/lib/pkgconfig/*.pc
+          echo '/usr/local/opt/bison/bin' >> "$GITHUB_PATH"
+          echo '/opt/homebrew/opt/bison/bin' >> "$GITHUB_PATH"
+
+      - name: Build the interpreter-only ARM64 engine
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash ios/Runtime/scripts/build-utm-engine.sh "$GITHUB_WORKSPACE/.build/UTM"
+          bash ios/Runtime/scripts/collect-framework-closure.sh \
+            "$GITHUB_WORKSPACE/.build/UTM/sysroot-iOS-TCI-arm64" \
+            "$GITHUB_WORKSPACE/.build/runtime/engine"
+
+      - name: Verify the engine artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .build/runtime/engine/Frameworks/qemu-aarch64-softmmu.framework/qemu-aarch64-softmmu
+          test -f .build/runtime/engine/frameworks.txt
+          test -f .build/runtime/engine/SHA256SUMS
+          (
+            cd .build/runtime/engine
+            shasum -a 256 --check SHA256SUMS
+          )
+          du -sh .build/runtime/engine
+
+      - name: Upload the no-JIT engine
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivscode-qemu-ios-tci-arm64-${{ github.sha }}
+          path: .build/runtime/engine
+          if-no-files-found: error
+          retention-days: 7
+
+  guest:
+    name: Minimal ARM64 Alpine guest
+    needs: verify
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+
+    env:
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.build/npm-cache
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.build/playwright
+      TMPDIR: ${{ github.workspace }}/.build/tmp/
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+      GUEST_ARTIFACT: ${{ github.workspace }}/.build/runtime/ivscode-alpine-aarch64.tar.zst
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep all mutable build state in the workspace
+        run: mkdir -p "$NPM_CONFIG_CACHE" "$PLAYWRIGHT_BROWSERS_PATH" "$TMPDIR" "$XDG_CACHE_HOME" .build/runtime
+
+      - name: Restore the guest image for this source revision
+        id: guest-cache
+        uses: actions/cache@v4
+        with:
+          path: .build/runtime/ivscode-alpine-aarch64.tar.zst
+          key: ivscode-guest-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+
+      - name: Select repository Node.js
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install guest and repository build requirements
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes e2fsprogs libkrb5-dev zstd
+          npm ci
+
+      - name: Compile the mangled server sources
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 25
+        run: npm run gulp compile-build-with-mangling
+
+      - name: Build the minimized REH web server
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 75
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run gulp clean-extensions-build
+          npm run gulp compile-non-native-extensions-build
+          npm run gulp compile-copilot-extension-build
+          npm run gulp compile-extension-media-build
+          npm run gulp minify-vscode-reh-web
+          npm run gulp vscode-reh-web-alpine-arm64-min-ci
+
+      - name: Build the verified Alpine guest image
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo bash ios/Runtime/scripts/build-guest-image.sh \
+            --server "$GITHUB_WORKSPACE/../vscode-reh-web-alpine-arm64" \
+            --output "$GUEST_ARTIFACT"
+
+      - name: Verify the guest transport artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$GUEST_ARTIFACT"
+          members="$(tar --zstd -tf "$GUEST_ARTIFACT")"
+          for required in vmlinuz-virt initramfs-virt rootfs.ext4 workspace.ext4 packages.txt SHA256SUMS runtime-manifest.json; do
+            grep -Eq "^\./${required}$" <<<"$members"
+          done
+          du -sh "$GUEST_ARTIFACT"
+
+      - name: Upload the Alpine guest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivscode-alpine-aarch64-${{ github.sha }}
+          path: .build/runtime/ivscode-alpine-aarch64.tar.zst
+          if-no-files-found: error
+          retention-days: 7
