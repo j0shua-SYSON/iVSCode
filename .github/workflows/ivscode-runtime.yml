@@ -109,7 +109,7 @@ jobs:
           brew uninstall cmake
           brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson
           python3 -m venv "$GITHUB_WORKSPACE/.build/utm-python"
-          "$GITHUB_WORKSPACE/.build/utm-python/bin/python" -m pip install six pyparsing
+          "$GITHUB_WORKSPACE/.build/utm-python/bin/python" -m pip install setuptools six pyparsing
           rm -f /usr/local/lib/pkgconfig/*.pc
           echo "$GITHUB_WORKSPACE/.build/utm-python/bin" >> "$GITHUB_PATH"
           echo '/usr/local/opt/bison/bin' >> "$GITHUB_PATH"
