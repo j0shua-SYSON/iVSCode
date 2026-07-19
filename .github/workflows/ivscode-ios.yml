@@ -63,6 +63,11 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      - name: Install the Linux native build requirement
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libkrb5-dev
+
       - name: Install repository dependencies
         env:
           # @vscode/ripgrep uses this for the GitHub release API. Anonymous
