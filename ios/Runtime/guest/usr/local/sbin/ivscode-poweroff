@@ -1,0 +1,7 @@
+#!/bin/sh
+
+set -eu
+
+rc-service ivscode stop || true
+sync
+exec /sbin/poweroff

@@ -1,28 +1,179 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "status": "scaffold-only",
+  "pins": {
+    "utm": {
+      "repository": "https://github.com/utmapp/UTM.git",
+      "version": "4.7.5",
+      "commit": "048ca7498ea3a374439149d51739d94c5300bcda",
+      "referenceReleaseAsset": {
+        "url": "https://github.com/utmapp/UTM/releases/download/v4.7.5/UTM-SE.ipa",
+        "sha256": "ccb8529b8b8781410ff481e4ffbdf0d1b47ce5d431031e782e4b6f9601cac06d",
+        "usage": "provenance reference only; not embedded"
+      },
+      "license": "Apache-2.0"
+    },
+    "qemu": {
+      "source": "https://github.com/utmapp/qemu/releases/download/v10.0.2-utm/qemu-10.0.2-utm.tar.xz",
+      "version": "10.0.2-utm",
+      "sha256": "f1d7357547a71ae3339a115d5c8f2b72e3b0089531d67c2aca43326d320ac6ca",
+      "license": "GPL-2.0"
+    },
+    "qemuKit": {
+      "repository": "https://github.com/utmapp/QEMUKit.git",
+      "commit": "589765abff27a8764d58b1a90999a204ac09881e",
+      "license": "Apache-2.0"
+    },
+    "alpine": {
+      "version": "3.24.1",
+      "architecture": "aarch64",
+      "minirootfs": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.1-aarch64.tar.gz",
+      "sha256": "f55a90f69052c5bd6f92cb09a8f47065970830b194c917a006fb94028e721259"
+    }
+  },
   "runtime": {
     "engine": "UTM-SE",
-    "upstream": "https://github.com/utmapp/UTM.git",
-    "version": "4.7.5",
-    "commit": "048ca7498ea3a374439149d51739d94c5300bcda",
-    "executionMode": "tci",
-    "jitRequired": false
+    "executionMode": "tcg-threaded-interpreter",
+    "jitRequired": false,
+    "hvfCompiled": false,
+    "privateHypervisorAPIs": false,
+    "disabledFeatures": [
+      "spice",
+      "vnc",
+      "opengl",
+      "virglrenderer",
+      "gtk",
+      "sdl"
+    ],
+    "guestTargetList": [
+      "aarch64-softmmu"
+    ],
+    "build": {
+      "host": "macos-15",
+      "xcode": "26.0",
+      "command": "NCPU=1 ./scripts/build_dependencies.sh -p ios-tci -a arm64",
+      "upstreamReferenceAppCommand": "./scripts/build_utm.sh -k iphoneos -s iOS-SE -a arm64 -o UTM",
+      "upstreamReferenceAppOutput": "UTM.xcarchive",
+      "upstreamOutput": "sysroot-iOS-TCI-arm64/Frameworks/qemu-aarch64-softmmu.framework",
+      "collector": "scripts/collect-framework-closure.sh"
+    },
+    "inProcessLauncher": {
+      "implementationSource": "utmapp/UTM UTMQemuSystem.m",
+      "framework": "qemu-aarch64-softmmu.framework",
+      "library": "qemu-aarch64-softmmu",
+      "symbols": [
+        "qemu_init",
+        "qemu_main_loop",
+        "qemu_cleanup"
+      ],
+      "processSpawningAllowed": false,
+      "controlTransport": "QMP and QEMU guest agent over four app-container FIFOs",
+      "qmpPipeSuffixes": [
+        ".in",
+        ".out"
+      ],
+      "qmpArguments": [
+        "-chardev pipe,path=<qmp-base>,id=org.qemu.monitor.qmp",
+        "-mon chardev=org.qemu.monitor.qmp,mode=control"
+      ],
+      "guestAgentArguments": [
+        "-device virtio-serial-pci",
+        "-chardev pipe,path=<qga-base>,id=org.qemu.guest_agent",
+        "-device virtserialport,chardev=org.qemu.guest_agent,name=org.qemu.guest_agent.0"
+      ]
+    }
   },
   "guest": {
     "architecture": "aarch64",
-    "machine": "virt",
+    "machine": "virt,highmem=off",
+    "cpu": "cortex-a72",
     "cpuCount": 2,
-    "memoryMiB": 768,
+    "memoryMiB": {
+      "baseline": 512,
+      "preferredWithEntitlement": 768
+    },
     "distribution": "alpine",
-    "display": "none",
+    "rootImage": "rootfs.ext4",
+    "workspaceTemplate": "workspace.ext4",
     "workspaceMount": "/workspace",
-    "serverPort": 8000
+    "kernel": "vmlinuz-virt",
+    "initramfs": "initramfs-virt",
+    "kernelCommandLine": "console=ttyAMA0 root=/dev/vda rootfstype=ext4 rw rootwait modules=virtio_pci,virtio_blk,virtio_net",
+    "qemuArguments": [
+      "-nodefaults",
+      "-machine virt,highmem=off",
+      "-cpu cortex-a72",
+      "-accel tcg,thread=multi,tb-size=64",
+      "-smp 2",
+      "-m 512",
+      "-display none",
+      "-serial null",
+      "-S",
+      "-no-reboot"
+    ],
+    "storageArguments": [
+      "-drive if=none,id=root,format=raw,file=<writable-rootfs.ext4>",
+      "-device virtio-blk-pci,drive=root",
+      "-drive if=none,id=workspace,format=raw,file=<workspace.ext4>",
+      "-device virtio-blk-pci,drive=workspace"
+    ],
+    "networkArguments": [
+      "-netdev user,id=net0,hostfwd=tcp:127.0.0.1:<host-port>-:8000",
+      "-device virtio-net-pci,netdev=net0",
+      "-device virtio-rng-pci"
+    ],
+    "devices": [
+      "virtio-blk-pci root",
+      "virtio-blk-pci workspace",
+      "virtio-net-pci with QEMU SLIRP",
+      "virtio-rng-pci",
+      "virtio-serial-pci guest agent"
+    ],
+    "network": {
+      "guestListenAddress": "0.0.0.0",
+      "guestPort": 8000,
+      "hostBindAddress": "127.0.0.1",
+      "hostPort": "ephemeral",
+      "internetAccess": true
+    }
   },
   "vscode": {
     "buildTask": "vscode-reh-web-alpine-arm64-min",
     "serverRoot": "/opt/ivscode/server",
     "dataRoot": "/workspace/.ivscode-server",
-    "listenAddress": "127.0.0.1",
-    "connectionToken": "ephemeral"
+    "user": "ivscode",
+    "connectionToken": {
+      "lifetime": "one launch",
+      "transport": "QEMU fw_cfg opt/ivscode/token",
+      "qemuArgument": "-fw_cfg name=opt/ivscode/token,file=<protected-token-file>",
+      "guestFile": "/run/ivscode/token",
+      "browserBootstrap": "http://127.0.0.1:<host-port>/?tkn=<percent-encoded-token>",
+      "serverCookie": "vscode-tkn",
+      "logging": "redacted"
+    }
+  },
+  "artifacts": {
+    "engine": "ivscode-qemu-ios-tci-arm64",
+    "guest": "ivscode-alpine-aarch64.tar.zst",
+    "guestMembers": [
+      "vmlinuz-virt",
+      "initramfs-virt",
+      "rootfs.ext4",
+      "workspace.ext4",
+      "packages.txt",
+      "SHA256SUMS"
+    ]
+  },
+  "releasePolicy": {
+    "appStoreProfile": "Bundle the reviewed guest, server, and toolchain; do not fetch executable guest payloads after review.",
+    "baselineSpecialEntitlements": [],
+    "optionalEntitlements": [
+      "com.apple.developer.kernel.increased-memory-limit",
+      "com.apple.developer.kernel.extended-virtual-addressing"
+    ],
+    "jitEntitlementAllowed": false,
+    "backgroundModes": [],
+    "approvalGuaranteed": false,
+    "licenseReviewRequired": true
   }
 }

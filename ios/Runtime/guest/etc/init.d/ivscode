@@ -1,0 +1,72 @@
+#!/sbin/openrc-run
+
+name="iVSCode server"
+description="Headless Code - OSS REH-web server"
+
+command="/opt/ivscode/server/node"
+command_args="/opt/ivscode/server/out/server-main.js --host 0.0.0.0 --port 8000 --connection-token-file /run/ivscode/token --server-data-dir /workspace/.ivscode-server --telemetry-level off --accept-server-license-terms"
+command_user="ivscode:ivscode"
+command_background="yes"
+pidfile="/run/ivscode/server.pid"
+output_log="/workspace/.ivscode-server/server.stdout.log"
+error_log="/workspace/.ivscode-server/server.stderr.log"
+
+depend() {
+	need net
+	after modules qemu-guest-agent
+}
+
+start_pre() {
+	local token token_source fsck_status
+	token_source="/sys/firmware/qemu_fw_cfg/by_name/opt/ivscode/token/raw"
+
+	if [ ! -r "$token_source" ]; then
+		eerror "missing per-launch token in QEMU fw_cfg"
+		return 1
+	fi
+	token="$(tr -d '\000\r\n' < "$token_source")"
+	case "$token" in
+		''|*[!A-Za-z0-9_-]*)
+			eerror "QEMU fw_cfg token is not base64url"
+			return 1
+			;;
+	esac
+	if [ "${#token}" -lt 32 ]; then
+		eerror "QEMU fw_cfg token is too short"
+		return 1
+	fi
+
+	checkpath --directory --mode 0750 --owner ivscode:ivscode /run/ivscode
+	printf '%s' "$token" > /run/ivscode/token
+	chown ivscode:ivscode /run/ivscode/token
+	chmod 0600 /run/ivscode/token
+	unset token
+
+	if [ ! -b /dev/vdb ]; then
+		eerror "workspace block device /dev/vdb is missing"
+		return 1
+	fi
+	if ! grep -qs ' /workspace ' /proc/mounts; then
+		fsck_status=0
+		e2fsck -p /dev/vdb || fsck_status=$?
+		if [ "$fsck_status" -gt 1 ]; then
+			eerror "workspace filesystem check failed with status $fsck_status"
+			return 1
+		fi
+		resize2fs /dev/vdb
+		mount -t ext4 -o noatime /dev/vdb /workspace
+	fi
+
+	chown ivscode:ivscode /workspace
+	checkpath --directory --mode 0750 --owner ivscode:ivscode /workspace/home
+	checkpath --directory --mode 0750 --owner ivscode:ivscode /workspace/.tmp
+	checkpath --directory --mode 0750 --owner ivscode:ivscode /workspace/.cache
+	checkpath --directory --mode 0750 --owner ivscode:ivscode /workspace/.ivscode-server
+	export HOME=/workspace/home
+	export TMPDIR=/workspace/.tmp
+	export XDG_CACHE_HOME=/workspace/.cache
+}
+
+stop_post() {
+	sync
+}
