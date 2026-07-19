@@ -107,6 +107,36 @@ if count != 1:
     raise SystemExit(f"expected exactly one reviewed iOS deployment target, found {count}")
 text = text.replace(upstream_minimum, ivscode_minimum)
 
+# QEMU creates its own Meson cross file instead of consuming the one generated
+# by UTM. Meson correctly refuses to execute an iOS configure probe on the
+# macOS host unless that second file also declares an executable wrapper is
+# required. Patch the unpacked, checksum-verified QEMU source immediately before
+# UTM configures it, and fail closed if the reviewed QEMU layout changes.
+qemu_build = 'build $QEMU_DIR --cross-prefix="" $QEMU_PLATFORM_BUILD_FLAGS'
+qemu_build_replacement = r'''python3 - "$QEMU_DIR/configure" <<'QEMU_MESON_PATCH'
+from pathlib import Path
+import sys
+
+configure = Path(sys.argv[1])
+source = configure.read_text(encoding="utf-8")
+marker = '  echo "[properties]" >> $cross'
+replacement = (
+    marker
+    + '\n  if test "$cross_compile" = "yes"; then'
+    + '\n    echo "needs_exe_wrapper = true" >> $cross'
+    + '\n  fi'
+)
+count = source.count(marker)
+if count != 1:
+    raise SystemExit(f"expected exactly one reviewed QEMU Meson properties marker, found {count}")
+configure.write_text(source.replace(marker, replacement), encoding="utf-8")
+QEMU_MESON_PATCH
+build $QEMU_DIR --cross-prefix="" $QEMU_PLATFORM_BUILD_FLAGS'''
+count = text.count(qemu_build)
+if count != 1:
+    raise SystemExit(f"expected exactly one reviewed QEMU build invocation, found {count}")
+text = text.replace(qemu_build, qemu_build_replacement)
+
 path.write_text(text, encoding="utf-8")
 
 sources_path = Path(sys.argv[4])
