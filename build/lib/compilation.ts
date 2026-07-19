@@ -16,7 +16,7 @@ import ansiColors from 'ansi-colors';
 import os from 'os';
 import File from 'vinyl';
 import * as task from './gulp/task.ts';
-import { Mangler } from './mangle/index.ts';
+import { Mangler, type MangleOutput } from './mangle/index.ts';
 import type { RawSourceMap } from 'source-map';
 import ts from 'typescript';
 import watch from './watch/index.ts';
@@ -141,7 +141,16 @@ export function compileTask(src: string, out: string, build: boolean, options: {
 		let mangleStream = es.through();
 		if (build && !options.disableMangle) {
 			let ts2tsMangler: Mangler | undefined = new Mangler(compile.projectPath, (...data) => fancyLog(ansiColors.blue('[mangler]'), ...data), { mangleExports: true, manglePrivateFields: true });
-			const newContentsByFileName = ts2tsMangler.computeNewFileContents(new Set(['saveState']));
+			let newContentsByFileName: Promise<Map<string, MangleOutput>>;
+			if (process.env['VSCODE_SERIALIZE_BUILD_MANGLE']) {
+				// The mangler and emitter each construct a full TypeScript program. Hosted
+				// runners cannot reliably retain both graphs at once, so finish and release
+				// the mangler before the emitter pipeline is created.
+				newContentsByFileName = Promise.resolve(await ts2tsMangler.computeNewFileContents(new Set(['saveState'])));
+				ts2tsMangler = undefined;
+			} else {
+				newContentsByFileName = ts2tsMangler.computeNewFileContents(new Set(['saveState']));
+			}
 			mangleStream = es.through(async function write(data: File & { sourceMap?: RawSourceMap }) {
 				type TypeScriptExt = typeof ts & { normalizePath(path: string): string };
 				const tsNormalPath = (ts as TypeScriptExt).normalizePath(data.path);

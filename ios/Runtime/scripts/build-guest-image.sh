@@ -123,6 +123,7 @@ packages=(
 	git
 	libgcc
 	libstdc++
+	krb5-libs
 	linux-virt
 	openssh-client
 	qemu-guest-agent
@@ -143,6 +144,24 @@ ln -s "/opt/ivscode/server/bin/remote-cli/$REMOTE_CLI" "$root/usr/local/bin/code
 chown -R 0:0 "$root/opt/ivscode/server"
 chroot "$root" /opt/ivscode/server/node --version >/dev/null
 chroot "$root" /opt/ivscode/server/bin/helpers/check-requirements.sh >/dev/null
+chroot "$root" /opt/ivscode/server/node - <<'NODE'
+const { createRequire } = require('node:module');
+const serverRequire = createRequire('/opt/ivscode/server/package.json');
+const nativeModules = [
+	'@parcel/watcher',
+	'@vscode/deviceid',
+	'@vscode/fs-copyfile',
+	'@vscode/native-watchdog',
+	'@vscode/spdlog',
+	'@vscode/sqlite3',
+	'kerberos',
+	'node-pty'
+];
+for (const name of nativeModules) {
+	serverRequire(name);
+	process.stdout.write(`loaded ${name}\n`);
+}
+NODE
 
 chroot "$root" /usr/sbin/adduser -D -u 1000 -h /workspace/home -s /bin/ash ivscode
 chroot "$root" /usr/bin/passwd -l ivscode >/dev/null

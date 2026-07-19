@@ -51,6 +51,7 @@ jobs:
           set -euo pipefail
           bash -n ios/Runtime/scripts/build-utm-engine.sh
           bash -n ios/Runtime/scripts/collect-framework-closure.sh
+          bash -n ios/Runtime/scripts/rebuild-alpine-remote-dependencies.sh
           bash -n ios/Runtime/scripts/build-guest-image.sh
           bash -n ios/Runtime/guest/etc/init.d/ivscode
           bash -n ios/Runtime/guest/usr/local/sbin/ivscode-poweroff
@@ -159,6 +160,7 @@ jobs:
       XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
       GUEST_ARTIFACT: ${{ github.workspace }}/.build/runtime/ivscode-alpine-aarch64.tar.zst
       VSCODE_SKIP_BUILD_TSGO: '1'
+      VSCODE_SERIALIZE_BUILD_MANGLE: '1'
 
     steps:
       - name: Check out iVSCode
@@ -217,6 +219,14 @@ jobs:
         if: steps.guest-cache.outputs.cache-hit != 'true'
         timeout-minutes: 25
         run: npm run gulp compile-build-with-mangling
+
+      - name: Rebuild native remote dependencies for Alpine
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 30
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: sudo --preserve-env=GITHUB_TOKEN,TMPDIR bash ios/Runtime/scripts/rebuild-alpine-remote-dependencies.sh
 
       - name: Build the minimized REH web server
         if: steps.guest-cache.outputs.cache-hit != 'true'

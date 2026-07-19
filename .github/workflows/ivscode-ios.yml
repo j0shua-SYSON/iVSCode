@@ -48,6 +48,7 @@ jobs:
       TMPDIR: ${{ github.workspace }}/.build/tmp/
       XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
       VSCODE_SKIP_BUILD_TSGO: '1'
+      VSCODE_SERIALIZE_BUILD_MANGLE: '1'
 
     steps:
       - name: Check out iVSCode

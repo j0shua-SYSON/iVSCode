@@ -745,6 +745,8 @@ export class Mangler {
 		}
 
 		service.dispose();
+		this.allClassDataByKey.clear();
+		this.allExportedSymbols.clear();
 		this.renameWorkerPool.terminate();
 
 		this.log(`Done: ${savedBytes / 1000}kb saved, memory-usage: ${JSON.stringify(v8.getHeapStatistics())}`);
