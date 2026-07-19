@@ -40,6 +40,44 @@ curl --fail --location --retry 5 --retry-all-errors --output "$archive" "$ALPINE
 printf '%s  %s\n' "$ALPINE_SHA256" "$archive" | sha256sum --check
 docker import "$archive" "$image" >/dev/null
 
+container_script="$(cat <<'IVSCODE_ALPINE_BUILD'
+printf "%s\n" \
+	https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
+	https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
+	> /etc/apk/repositories
+apk add --no-cache \
+	build-base \
+	ca-certificates \
+	git \
+	krb5-dev \
+	linux-headers \
+	nodejs \
+	nodejs-dev \
+	npm \
+	pkgconf \
+	python3
+# The host install is glibc-based. Rebuild from empty trees against the exact
+# Node runtime and musl headers that will be present in the guest.
+export npm_config_build_from_source=true
+export npm_config_libc=musl
+export npm_config_nodedir=/usr
+export npm_config_runtime=node
+export npm_config_target="$(node --print process.versions.node)"
+# Alpine enables LTO in Node.js config.gypi. Addons inherit those flags, but
+# GCC 15 cannot link spdlog's bundled fmt through fortified stdio.
+export CFLAGS="${CFLAGS:-} -fno-lto"
+export CXXFLAGS="${CXXFLAGS:-} -fno-lto"
+export LDFLAGS="${LDFLAGS:-} -fno-lto"
+npm install --global node-gyp-build
+rm -rf /workspace/remote/node_modules
+npm ci --foreground-scripts
+cd /workspace/extensions/git
+rm -rf /workspace/extensions/git/node_modules
+npm ci --foreground-scripts
+IVSCODE_ALPINE_BUILD
+)"
+sh -n -c "$container_script"
+
 docker run --rm \
 	--env GITHUB_TOKEN \
 	--env npm_config_arch=arm64 \
@@ -47,41 +85,7 @@ docker run --rm \
 	--volume "$repository_root:/workspace" \
 	--workdir /workspace/remote \
 	"$image" \
-	/bin/sh -euxc '
-		printf "%s\n" \
-			https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
-			https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
-			> /etc/apk/repositories
-		apk add --no-cache \
-			build-base \
-			ca-certificates \
-			git \
-			krb5-dev \
-			linux-headers \
-			nodejs \
-			nodejs-dev \
-			npm \
-			pkgconf \
-			python3
-		# The host install is glibc-based. Rebuild from empty trees against the
-		# exact Node runtime and musl headers that will be present in the guest.
-		export npm_config_build_from_source=true
-		export npm_config_libc=musl
-		export npm_config_nodedir=/usr
-		export npm_config_runtime=node
-		export npm_config_target="$(node --print process.versions.node)"
-		# Alpine enables LTO in Node's config.gypi. Addons inherit those flags,
-		# but GCC 15 cannot link spdlog's bundled fmt through fortified stdio.
-		export CFLAGS="${CFLAGS:-} -fno-lto"
-		export CXXFLAGS="${CXXFLAGS:-} -fno-lto"
-		export LDFLAGS="${LDFLAGS:-} -fno-lto"
-		npm install --global node-gyp-build
-		rm -rf /workspace/remote/node_modules
-		npm ci --foreground-scripts
-		cd /workspace/extensions/git
-		rm -rf /workspace/extensions/git/node_modules
-		npm ci --foreground-scripts
-	'
+	/bin/sh -euxc "$container_script"
 
 # VS Code deliberately discards Parcel's downloaded platform packages and
 # packages the locally compiled binding instead.
