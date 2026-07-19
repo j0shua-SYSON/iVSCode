@@ -94,6 +94,10 @@ jobs:
           --pretty false
           --noEmit
 
+      - name: Type-check the build tooling
+        timeout-minutes: 15
+        run: cd build && npm run typecheck
+
       - name: Compile the mangled production workbench
         timeout-minutes: 120
         run: npm run gulp compile-build-with-mangling

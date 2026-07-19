@@ -115,6 +115,10 @@ jobs:
           --pretty false
           --noEmit
 
+      - name: Type-check the build tooling
+        timeout-minutes: 15
+        run: cd build && npm run typecheck
+
       - name: Compile the mangled production workbench
         timeout-minutes: 120
         run: npm run gulp compile-build-with-mangling
@@ -313,6 +317,11 @@ jobs:
           --project src/tsconfig.json
           --pretty false
           --noEmit
+
+      - name: Type-check the build tooling
+        if: steps.guest-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        run: cd build && npm run typecheck
 
       - name: Compile the mangled server sources
         if: steps.guest-cache.outputs.cache-hit != 'true'
