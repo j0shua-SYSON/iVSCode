@@ -64,6 +64,10 @@ jobs:
           cache: npm
 
       - name: Install repository dependencies
+        env:
+          # @vscode/ripgrep uses this for the GitHub release API. Anonymous
+          # requests are too easy to rate-limit on shared hosted runners.
+          GITHUB_TOKEN: ${{ github.token }}
         run: npm ci
 
       - name: Build the production browser workbench
