@@ -59,13 +59,23 @@ docker run --rm \
 			krb5-dev \
 			linux-headers \
 			nodejs \
+			nodejs-dev \
 			npm \
 			pkgconf \
 			python3
+		# The host install is glibc-based. Rebuild from empty trees against the
+		# exact Node runtime and musl headers that will be present in the guest.
+		export npm_config_build_from_source=true
+		export npm_config_libc=musl
+		export npm_config_nodedir=/usr
+		export npm_config_runtime=node
+		export npm_config_target="$(node --print process.versions.node)"
 		npm install --global node-gyp-build
-		npm ci
+		rm -rf /workspace/remote/node_modules
+		npm ci --foreground-scripts
 		cd /workspace/extensions/git
-		npm ci
+		rm -rf /workspace/extensions/git/node_modules
+		npm ci --foreground-scripts
 	'
 
 # VS Code deliberately discards Parcel's downloaded platform packages and
