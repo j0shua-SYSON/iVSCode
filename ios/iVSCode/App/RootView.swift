@@ -20,7 +20,8 @@ struct RootView: View {
 				WorkbenchView(
 					url: url,
 					messageHandler: model.receiveWorkbenchMessage,
-					navigationFailureHandler: model.workbenchNavigationFailed
+					navigationFailureHandler: model.workbenchNavigationFailed,
+					navigationFinishedHandler: model.workbenchNavigationFinished
 				)
 					.ignoresSafeArea()
 				if !model.workbenchStarted {

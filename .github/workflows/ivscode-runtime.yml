@@ -10,7 +10,7 @@ on:
       - '.nvmrc'
       - 'build/**'
       - 'extensions/**'
-      - 'ios/Runtime/**'
+      - 'ios/**'
       - 'package.json'
       - 'package-lock.json'
       - 'product.json'
@@ -55,6 +55,96 @@ jobs:
           bash -n ios/Runtime/scripts/build-guest-image.sh
           bash -n ios/Runtime/guest/etc/init.d/ivscode
           bash -n ios/Runtime/guest/usr/local/sbin/ivscode-poweroff
+          bash -n ios/scripts/embed-runtime-frameworks.sh
+          bash -n ios/scripts/generate-app-icon.sh
+          bash -n ios/scripts/stage-runtime.sh
+
+  web:
+    name: Production web workbench for the full app
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    env:
+      NPM_CONFIG_CACHE: ${{ github.workspace }}/.build/npm-cache
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.build/playwright
+      TMPDIR: ${{ github.workspace }}/.build/tmp/
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+      VSCODE_SKIP_BUILD_TSGO: '1'
+      VSCODE_SERIALIZE_BUILD_MANGLE: '1'
+      VSCODE_MANGLE_WORKERS: '1'
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep all mutable build state in the workspace
+        run: mkdir -p "$NPM_CONFIG_CACHE" "$PLAYWRIGHT_BROWSERS_PATH" "$TMPDIR" "$XDG_CACHE_HOME" ios/.build
+
+      - name: Select repository Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install the Linux native build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            libkrb5-dev \
+            libnotify-bin \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxkbfile-dev \
+            pkg-config
+
+      - name: Install repository dependencies
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm ci
+
+      - name: Type-check with native TypeScript
+        timeout-minutes: 15
+        run: >-
+          node --max-old-space-size=8192
+          node_modules/@typescript/native/bin/tsc
+          --project src/tsconfig.json
+          --pretty false
+          --noEmit
+
+      - name: Compile the mangled production workbench
+        timeout-minutes: 120
+        run: npm run gulp compile-build-with-mangling
+
+      - name: Package the minimized browser workbench
+        timeout-minutes: 30
+        run: npm run gulp vscode-web-min-ci
+
+      - name: Stage and verify the workbench
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ios/scripts/package-workbench.mjs --source ../vscode-web
+          workbench='ios/iVSCode/Generated/Workbench'
+          test -f "$workbench/index.html"
+          test -f "$workbench/ivscode.bootstrap.js"
+          test -f "$workbench/out/nls.messages.js"
+          test -f "$workbench/out/vs/workbench/workbench.web.main.internal.js"
+          test -f "$workbench/out/vs/workbench/workbench.web.main.internal.css"
+          test -d "$workbench/extensions/code-mobile"
+          test -f "$workbench/ivscode-build.json"
+          tar -cf ios/.build/iVSCode-Workbench.tar -C "$workbench" .
+
+      - name: Upload the workbench
+        uses: actions/upload-artifact@v4
+        with:
+          name: ivscode-full-workbench-${{ github.sha }}
+          path: ios/.build/iVSCode-Workbench.tar
+          if-no-files-found: error
+          retention-days: 1
 
   engine:
     name: No-JIT iOS QEMU engine
@@ -110,7 +200,8 @@ jobs:
           brew uninstall cmake
           brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson
           python3 -m venv "$GITHUB_WORKSPACE/.build/utm-python"
-          "$GITHUB_WORKSPACE/.build/utm-python/bin/python" -m pip install setuptools six pyparsing
+          "$GITHUB_WORKSPACE/.build/utm-python/bin/python" -m pip install \
+            setuptools six pyparsing distlib mako pyyaml
           rm -f /usr/local/lib/pkgconfig/*.pc
           echo "$GITHUB_WORKSPACE/.build/utm-python/bin" >> "$GITHUB_PATH"
           echo '/usr/local/opt/bison/bin' >> "$GITHUB_PATH"
@@ -130,20 +221,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f .build/runtime/engine/Frameworks/qemu-aarch64-softmmu.framework/qemu-aarch64-softmmu
+          qemu='.build/runtime/engine/Frameworks/qemu-aarch64-softmmu.framework/qemu-aarch64-softmmu'
+          test -f "$qemu"
+          test -x "$qemu"
           test -f .build/runtime/engine/frameworks.txt
           test -f .build/runtime/engine/SHA256SUMS
           (
             cd .build/runtime/engine
             shasum -a 256 --check SHA256SUMS
           )
+          tar -czf .build/runtime/ivscode-qemu-ios-tci-arm64.tar.gz \
+            -C .build/runtime/engine .
+          tar -tzf .build/runtime/ivscode-qemu-ios-tci-arm64.tar.gz >/dev/null
           du -sh .build/runtime/engine
 
       - name: Upload the no-JIT engine
         uses: actions/upload-artifact@v4
         with:
           name: ivscode-qemu-ios-tci-arm64-${{ github.sha }}
-          path: .build/runtime/engine
+          # upload-artifact normalizes file modes. The tar transport preserves
+          # the executable bits required by iOS's dynamic loader.
+          path: .build/runtime/ivscode-qemu-ios-tci-arm64.tar.gz
           if-no-files-found: error
           retention-days: 7
 
@@ -151,7 +249,7 @@ jobs:
     name: Minimal ARM64 Alpine guest
     needs: verify
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 180
+    timeout-minutes: 300
 
     env:
       NPM_CONFIG_CACHE: ${{ github.workspace }}/.build/npm-cache
@@ -218,7 +316,7 @@ jobs:
 
       - name: Compile the mangled server sources
         if: steps.guest-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: npm run gulp compile-build-with-mangling
 
       - name: Rebuild native remote dependencies for Alpine
@@ -260,6 +358,15 @@ jobs:
           for required in vmlinuz-virt initramfs-virt rootfs.ext4 workspace.ext4 packages.txt SHA256SUMS runtime-manifest.json; do
             grep -Eq "^\./${required}$" <<<"$members"
           done
+          verification='.build/runtime/guest-verification'
+          rm -rf "$verification"
+          mkdir -p "$verification"
+          tar --zstd -xf "$GUEST_ARTIFACT" -C "$verification"
+          (
+            cd "$verification"
+            sha256sum --check SHA256SUMS
+          )
+          cmp -s ios/Runtime/manifest.json "$verification/runtime-manifest.json"
           du -sh "$GUEST_ARTIFACT"
 
       - name: Upload the Alpine guest
@@ -267,5 +374,167 @@ jobs:
         with:
           name: ivscode-alpine-aarch64-${{ github.sha }}
           path: .build/runtime/ivscode-alpine-aarch64.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  full-app:
+    name: Full runtime and unsigned iOS app
+    needs:
+      - engine
+      - guest
+      - web
+    runs-on: macos-26
+    timeout-minutes: 90
+
+    env:
+      TMPDIR: ${{ github.workspace }}/.build/tmp/
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep all mutable build state in the workspace
+        run: >-
+          mkdir -p
+          "$TMPDIR"
+          "$XDG_CACHE_HOME"
+          .build/runtime/engine
+          .build/runtime/engine-transport
+          .build/runtime/guest
+          .build/workbench
+          ios/.build
+          ios/iVSCode/Generated/Workbench
+
+      - name: Download the no-JIT engine
+        uses: actions/download-artifact@v4
+        with:
+          name: ivscode-qemu-ios-tci-arm64-${{ github.sha }}
+          path: .build/runtime/engine-transport
+
+      - name: Download the Alpine guest
+        uses: actions/download-artifact@v4
+        with:
+          name: ivscode-alpine-aarch64-${{ github.sha }}
+          path: .build/runtime/guest
+
+      - name: Download the production workbench
+        uses: actions/download-artifact@v4
+        with:
+          name: ivscode-full-workbench-${{ github.sha }}
+          path: .build/workbench
+
+      - name: Expand and stage the verified app payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v zstd >/dev/null 2>&1 || brew install zstd
+          tar -xzf .build/runtime/engine-transport/ivscode-qemu-ios-tci-arm64.tar.gz \
+            -C .build/runtime/engine
+          test -x .build/runtime/engine/Frameworks/qemu-aarch64-softmmu.framework/qemu-aarch64-softmmu
+          tar -xf .build/workbench/iVSCode-Workbench.tar -C ios/iVSCode/Generated/Workbench
+          bash ios/scripts/stage-runtime.sh \
+            --engine "$GITHUB_WORKSPACE/.build/runtime/engine" \
+            --guest "$GITHUB_WORKSPACE/.build/runtime/guest/ivscode-alpine-aarch64.tar.zst"
+
+      - name: Select the pinned project generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$GITHUB_WORKSPACE/.build/xcodegen.zip"
+          destination="$GITHUB_WORKSPACE/.build/xcodegen"
+          curl --fail --location --retry 3 \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip \
+            --output "$archive"
+          echo '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  '"$archive" | shasum -a 256 --check
+          ditto -x -k "$archive" "$destination"
+          echo "$destination/bin" >> "$GITHUB_PATH"
+
+      - name: Generate the Xcode project
+        run: |
+          xcodebuild -version
+          xcodegen --version
+          xcodegen generate --spec ios/project.yml
+
+      - name: Build the unsigned full-runtime app
+        run: >-
+          xcodebuild
+          -project ios/iVSCode.xcodeproj
+          -scheme iVSCode
+          -configuration Release
+          -destination 'generic/platform=iOS'
+          -derivedDataPath ios/.build/DerivedData-Full
+          -clonedSourcePackagesDirPath ios/.build/SourcePackages
+          CODE_SIGNING_ALLOWED=NO
+          IVSCODE_REQUIRE_RUNTIME=1
+          build
+
+      - name: Verify the full-runtime app contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          app='ios/.build/DerivedData-Full/Build/Products/Release-iphoneos/iVSCode.app'
+          runtime='ios/iVSCode/Generated/Runtime'
+          test -d "$app"
+          test -f "$app/Workbench/index.html"
+          test -f "$app/Workbench/out/vs/workbench/workbench.web.main.internal.js"
+          test -f "$app/Guest/vmlinuz-virt"
+          test -f "$app/Guest/initramfs-virt"
+          test -f "$app/Guest/rootfs.ext4"
+          test -f "$app/Guest/workspace.ext4"
+          cmp -s ios/Runtime/manifest.json "$app/Guest/runtime-manifest.json"
+          (
+            cd "$app/Guest"
+            shasum -a 256 --check SHA256SUMS
+          )
+          while IFS= read -r framework; do
+            test -n "$framework"
+            test -d "$app/Frameworks/$framework"
+            find "$app/Frameworks/$framework" -maxdepth 1 -type f -perm -111 \
+              -print -quit | grep -q .
+          done < "$runtime/frameworks.txt"
+          grep '  Frameworks/' "$runtime/SHA256SUMS" | (
+            cd "$app"
+            shasum -a 256 --check
+          )
+          qemu="$app/Frameworks/qemu-aarch64-softmmu.framework/qemu-aarch64-softmmu"
+          test -x "$qemu"
+          exports="$(nm -gjU "$qemu")"
+          for symbol in qemu_init qemu_main_loop qemu_cleanup; do
+            grep -Eq "^_?${symbol}$" <<<"$exports"
+          done
+          if find "$app/Frameworks" -type f -perm -111 -print0 | \
+            xargs -0 nm -u 2>/dev/null | grep -Eq '[[:space:]]_hv_[[:alnum:]_]*$'; then
+            echo 'error: private Hypervisor symbols leaked into the packaged app' >&2
+            exit 1
+          fi
+          plutil -lint "$app/Info.plist"
+          du -sh "$app" "$app/Guest" "$app/Frameworks"
+
+      - name: Package an unsigned full-runtime IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_root='ios/.build/full-package'
+          app='ios/.build/DerivedData-Full/Build/Products/Release-iphoneos/iVSCode.app'
+          mkdir -p "$package_root/Payload"
+          ditto "$app" "$package_root/Payload/iVSCode.app"
+          (
+            cd "$package_root"
+            /usr/bin/zip -qry ../iVSCode-full-unsigned.ipa Payload
+          )
+          shasum -a 256 ios/.build/iVSCode-full-unsigned.ipa > ios/.build/iVSCode-full-unsigned.ipa.sha256
+
+      - name: Upload the unsigned full app
+        uses: actions/upload-artifact@v4
+        with:
+          name: iVSCode-full-unsigned-${{ github.sha }}
+          path: |
+            ios/.build/iVSCode-full-unsigned.ipa
+            ios/.build/iVSCode-full-unsigned.ipa.sha256
+            ios/iVSCode/Generated/Workbench/ivscode-build.json
+            ios/iVSCode/Generated/Runtime/runtime-manifest.json
           if-no-files-found: error
           retention-days: 7

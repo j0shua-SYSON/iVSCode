@@ -71,6 +71,9 @@ collect_framework() {
 	[[ -n "$binary" && -f "$binary" ]] || fail "cannot identify Mach-O binary in $framework"
 	file "$binary" | grep -q 'Mach-O' || fail "framework entry point is not Mach-O: $binary"
 	[[ "$(lipo -archs "$binary")" == "arm64" ]] || fail "framework is not arm64-only: $binary"
+	if nm -u "$binary" | grep -Eq '[[:space:]]_hv_[[:alnum:]_]*$'; then
+		printf '%s -> forbidden private Hypervisor symbol\n' "$name" >> "$unresolved"
+	fi
 
 	while IFS= read -r dependency; do
 		[[ -n "$dependency" ]] || continue
@@ -108,10 +111,11 @@ collect_framework() {
 collect_framework "$SEED"
 
 seed_binary="$(framework_binary "$SEED")"
-if nm -u "$seed_binary" | grep -Eq '[[:space:]]_hv_[[:alnum:]_]*$'; then
-	printf 'error: QEMU still imports private Hypervisor symbols\n' >&2
-	exit 1
-fi
+exported_symbols="$(nm -gjU "$seed_binary")"
+for required_export in qemu_init qemu_main_loop qemu_cleanup; do
+	grep -Eq "^_?${required_export}$" <<<"$exported_symbols" || \
+		fail "QEMU does not export the required launcher symbol: $required_export"
+done
 
 if [[ -s "$unresolved" ]]; then
 	printf 'Unresolved non-system Mach-O dependencies:\n' >&2

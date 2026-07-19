@@ -64,6 +64,8 @@ docker run --rm \
 			python3
 		npm install --global node-gyp-build
 		npm ci
+		cd /workspace/extensions/git
+		npm ci
 	'
 
 # VS Code deliberately discards Parcel's downloaded platform packages and
@@ -76,20 +78,28 @@ if [[ -d "$parcel_root" ]]; then
 	done < <(find "$parcel_root" -mindepth 1 -maxdepth 1 -type d -name 'watcher-*' -print0)
 fi
 
+native_roots=(
+	"$repository_root/remote/node_modules"
+	"$repository_root/extensions/git/node_modules"
+)
 native_count=0
-while IFS= read -r -d '' addon; do
-	native_count=$((native_count + 1))
-	readelf --file-header "$addon" | grep -Eq 'Machine:[[:space:]]+AArch64' || \
-		fail "native addon is not AArch64: $addon"
-	if readelf --version-info "$addon" 2>/dev/null | grep -q 'GLIBC_'; then
-		fail "glibc symbol version leaked into Alpine addon: $addon"
-	fi
-done < <(find "$repository_root/remote/node_modules" -type f -name '*.node' -print0)
+for native_root in "${native_roots[@]}"; do
+	[[ -d "$native_root" ]] || fail "native dependency root is missing: $native_root"
+	while IFS= read -r -d '' addon; do
+		native_count=$((native_count + 1))
+		readelf --file-header "$addon" | grep -Eq 'Machine:[[:space:]]+AArch64' || \
+			fail "native addon is not AArch64: $addon"
+		if readelf --version-info "$addon" 2>/dev/null | grep -q 'GLIBC_'; then
+			fail "glibc symbol version leaked into Alpine addon: $addon"
+		fi
+	done < <(find "$native_root" -type f -name '*.node' -print0)
+done
 (( native_count > 0 )) || fail "remote dependency rebuild produced no native addons"
 
 if [[ -n "${SUDO_USER:-}" ]]; then
 	chown -R "${SUDO_UID:-$(id -u)}:${SUDO_GID:-$(id -g)}" \
 		"$repository_root/remote/node_modules" \
+		"$repository_root/extensions/git/node_modules" \
 		"$repository_root/.build/runtime/alpine-npm-cache"
 fi
 

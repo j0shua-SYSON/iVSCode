@@ -9,7 +9,7 @@ const runtimeRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const manifest = JSON.parse(await readFile(resolve(runtimeRoot, 'manifest.json'), 'utf8'));
 
 assert.equal(manifest.schemaVersion, 2);
-assert.equal(manifest.status, 'scaffold-only');
+assert.equal(manifest.status, 'integrated-awaiting-device-validation');
 assert.match(manifest.pins.utm.commit, /^[0-9a-f]{40}$/);
 assert.match(manifest.pins.utm.referenceReleaseAsset.sha256, /^[0-9a-f]{64}$/);
 assert.match(manifest.pins.qemu.sha256, /^[0-9a-f]{64}$/);

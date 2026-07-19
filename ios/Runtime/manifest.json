@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "status": "scaffold-only",
+  "status": "integrated-awaiting-device-validation",
   "pins": {
     "utm": {
       "repository": "https://github.com/utmapp/UTM.git",

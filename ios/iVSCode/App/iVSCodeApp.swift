@@ -17,6 +17,8 @@ struct iVSCodeApp: App {
 				.onChange(of: scenePhase) { _, phase in
 					if phase == .active {
 						model.resumeIfNeeded()
+					} else if phase == .background {
+						model.prepareForBackground()
 					}
 				}
 		}

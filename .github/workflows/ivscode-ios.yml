@@ -40,7 +40,7 @@ jobs:
   web:
     name: Production web workbench
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     env:
       NPM_CONFIG_CACHE: ${{ github.workspace }}/.build/npm-cache
@@ -95,7 +95,7 @@ jobs:
           --noEmit
 
       - name: Compile the mangled production workbench
-        timeout-minutes: 60
+        timeout-minutes: 120
         run: npm run gulp compile-build-with-mangling
 
       - name: Package the minimized browser workbench
@@ -130,9 +130,60 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  native:
+    name: Native iOS integration check
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    env:
+      TMPDIR: ${{ github.workspace }}/.build/tmp/
+      XDG_CACHE_HOME: ${{ github.workspace }}/.build/xdg-cache
+
+    steps:
+      - name: Check out iVSCode
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Keep all mutable build state in the workspace
+        run: mkdir -p "$TMPDIR" "$XDG_CACHE_HOME" ios/.build
+
+      - name: Select the pinned project generator
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$GITHUB_WORKSPACE/.build/xcodegen.zip"
+          destination="$GITHUB_WORKSPACE/.build/xcodegen"
+          curl --fail --location --retry 3 \
+            https://github.com/yonaskolb/XcodeGen/releases/download/2.46.0/xcodegen.zip \
+            --output "$archive"
+          echo '4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806  '"$archive" | shasum -a 256 --check
+          ditto -x -k "$archive" "$destination"
+          echo "$destination/bin" >> "$GITHUB_PATH"
+
+      - name: Generate the Xcode project
+        run: |
+          xcodebuild -version
+          xcodegen --version
+          xcodegen generate --spec ios/project.yml
+
+      - name: Compile the native shell and QEMU bridge
+        run: >-
+          xcodebuild
+          -project ios/iVSCode.xcodeproj
+          -scheme iVSCode
+          -configuration Release
+          -destination 'generic/platform=iOS Simulator'
+          -derivedDataPath ios/.build/DerivedData-Native
+          -clonedSourcePackagesDirPath ios/.build/SourcePackages
+          CODE_SIGNING_ALLOWED=NO
+          build
+
   build:
     name: Web workbench and unsigned iOS app
-    needs: web
+    needs:
+      - native
+      - web
     runs-on: macos-26
     timeout-minutes: 45
 
@@ -179,17 +230,6 @@ jobs:
       - name: Generate the Xcode project
         run: xcodegen generate --spec ios/project.yml
 
-      - name: Build for the iOS Simulator
-        run: >-
-          xcodebuild
-          -project ios/iVSCode.xcodeproj
-          -scheme iVSCode
-          -configuration Release
-          -destination 'generic/platform=iOS Simulator'
-          -derivedDataPath ios/.build/DerivedData-Simulator
-          CODE_SIGNING_ALLOWED=NO
-          build
-
       - name: Build the unsigned device app
         run: >-
           xcodebuild
@@ -198,6 +238,7 @@ jobs:
           -configuration Release
           -destination 'generic/platform=iOS'
           -derivedDataPath ios/.build/DerivedData-Device
+          -clonedSourcePackagesDirPath ios/.build/SourcePackages
           CODE_SIGNING_ALLOWED=NO
           build
 

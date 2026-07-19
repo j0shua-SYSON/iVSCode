@@ -30,22 +30,37 @@ VS Code subsystems with iOS-specific imitations.
 - `.github/workflows/ivscode-ios.yml`: web build, simulator/device compile, and
   unsigned IPA packaging on a GitHub-hosted macOS runner.
 
-## CI build
+## Hosted builds
 
-The workflow performs the equivalent of:
+`.github/workflows/ivscode-ios.yml` builds the recovery app and compiles the
+native QEMU bridge early on a separate macOS job. `.github/workflows/ivscode-runtime.yml`
+builds the complete no-JIT engine, Alpine guest, production browser workbench,
+and an unsigned full-runtime IPA from one source revision. The latter performs
+the equivalent of:
 
 ```sh
 npm ci
 npm run gulp vscode-web-min
 node ios/scripts/package-workbench.mjs --source ../vscode-web
+bash ios/scripts/stage-runtime.sh --engine /artifact/engine --guest /artifact/guest.tar.zst
 xcodegen generate --spec ios/project.yml
 xcodebuild -project ios/iVSCode.xcodeproj -scheme iVSCode \
-  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+  -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO \
+  IVSCODE_REQUIRE_RUNTIME=1 build
 ```
 
 Generated workbench files and Xcode output are ignored. Signed device and
 TestFlight builds require an Apple team and signing secrets; the default CI path
-produces an unsigned device bundle without storing credentials.
+produces unsigned recovery and full-runtime IPAs without storing credentials.
+
+## Validation boundary
+
+The launcher, QMP/QGA control path, runtime staging, framework closure, guest
+checksums, and both iOS targets are hosted-build gates. The runtime remains
+marked `integrated-awaiting-device-validation` until a physical iPhone or iPad
+passes cold boot, terminal/tasks, Git/search, persistence, background/relaunch,
+memory-pressure, and thermal checks. iVSCode is never installed on a device by
+these workflows.
 
 ## Distribution boundary
 

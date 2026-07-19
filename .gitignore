@@ -51,6 +51,14 @@ dist
 
 # iVSCode iOS build products (generated on GitHub-hosted macOS runners)
 /ios/iVSCode.xcodeproj/
+/ios/iVSCode/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
 /ios/iVSCode/Generated/Workbench/*
 !/ios/iVSCode/Generated/Workbench/.gitkeep
+/ios/iVSCode/Generated/Runtime/Guest/*
+!/ios/iVSCode/Generated/Runtime/Guest/.gitkeep
+/ios/iVSCode/Generated/Runtime/Frameworks/*
+!/ios/iVSCode/Generated/Runtime/Frameworks/.gitkeep
+/ios/iVSCode/Generated/Runtime/frameworks.txt
+/ios/iVSCode/Generated/Runtime/SHA256SUMS
+/ios/iVSCode/Generated/Runtime/runtime-manifest.json
 /ios/.build/

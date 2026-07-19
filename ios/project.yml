@@ -7,6 +7,11 @@ options:
   xcodeVersion: "26.0"
   createIntermediateGroups: true
 
+packages:
+  QEMUKit:
+    url: https://github.com/utmapp/QEMUKit.git
+    revision: 589765abff27a8764d58b1a90999a204ac09881e
+
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -25,9 +30,15 @@ targets:
       - path: iVSCode
         excludes:
           - Generated/Workbench
+          - Generated/Runtime
       - path: iVSCode/Generated/Workbench
         type: folder
         buildPhase: resources
+      - path: iVSCode/Generated/Runtime/Guest
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: QEMUKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.ivscode.app
@@ -47,5 +58,28 @@ targets:
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: ""
+        # This phase only copies the reviewed runtime closure already staged
+        # inside the repository. Its optional manifest cannot be represented
+        # as a fixed Xcode input list for recovery-only builds.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_OBJC_BRIDGING_HEADER: iVSCode/iVSCode-Bridging-Header.h
+        LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/Frameworks
+    preBuildScripts:
+      - name: Generate the iVSCode app icon
+        path: scripts/generate-app-icon.sh
+        shell: /bin/bash
+        showEnvVars: false
+        inputFiles:
+          - $(SRCROOT)/../resources/server/code-512.png
+          - $(SRCROOT)/scripts/generate-app-icon.swift
+        outputFiles:
+          - $(SRCROOT)/iVSCode/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png
+    postBuildScripts:
+      - name: Embed the no-JIT runtime closure
+        path: scripts/embed-runtime-frameworks.sh
+        shell: /bin/bash
+        showEnvVars: false
+        basedOnDependencyAnalysis: false
     scheme:
       gatherCoverageData: false

@@ -161,6 +161,9 @@ for (const name of nativeModules) {
 	serverRequire(name);
 	process.stdout.write(`loaded ${name}\n`);
 }
+const gitRequire = createRequire('/opt/ivscode/server/extensions/git/package.json');
+gitRequire('@vscode/fs-copyfile');
+process.stdout.write('loaded extensions/git @vscode/fs-copyfile\n');
 NODE
 
 chroot "$root" /usr/sbin/adduser -D -u 1000 -h /workspace/home -s /bin/ash ivscode

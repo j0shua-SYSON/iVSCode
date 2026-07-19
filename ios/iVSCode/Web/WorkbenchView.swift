@@ -11,12 +11,14 @@ struct WorkbenchView: UIViewRepresentable {
 	let url: URL
 	let messageHandler: (Any) -> Void
 	let navigationFailureHandler: (String) -> Void
+	let navigationFinishedHandler: () -> Void
 
 	func makeCoordinator() -> Coordinator {
 		Coordinator(
 			baseURL: url,
 			messageHandler: messageHandler,
-			navigationFailureHandler: navigationFailureHandler
+			navigationFailureHandler: navigationFailureHandler,
+			navigationFinishedHandler: navigationFinishedHandler
 		)
 	}
 
@@ -47,7 +49,7 @@ struct WorkbenchView: UIViewRepresentable {
 	}
 
 	func updateUIView(_ webView: WKWebView, context: Context) {
-		guard webView.url?.host != url.host || webView.url?.port != url.port else {
+		guard context.coordinator.baseURL != url else {
 			return
 		}
 		context.coordinator.baseURL = url
@@ -63,15 +65,18 @@ struct WorkbenchView: UIViewRepresentable {
 		var baseURL: URL
 		private let messageHandler: (Any) -> Void
 		private let navigationFailureHandler: (String) -> Void
+		private let navigationFinishedHandler: () -> Void
 
 		init(
 			baseURL: URL,
 			messageHandler: @escaping (Any) -> Void,
-			navigationFailureHandler: @escaping (String) -> Void
+			navigationFailureHandler: @escaping (String) -> Void,
+			navigationFinishedHandler: @escaping () -> Void
 		) {
 			self.baseURL = baseURL
 			self.messageHandler = messageHandler
 			self.navigationFailureHandler = navigationFailureHandler
+			self.navigationFinishedHandler = navigationFinishedHandler
 		}
 
 		func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -126,6 +131,10 @@ struct WorkbenchView: UIViewRepresentable {
 
 		func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation?, withError error: Error) {
 			navigationFailureHandler("The private workbench origin is unavailable: \(error.localizedDescription)")
+		}
+
+		func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
+			navigationFinishedHandler()
 		}
 
 		func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {

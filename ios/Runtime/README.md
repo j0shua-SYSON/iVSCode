@@ -6,10 +6,11 @@ not a VM desktop. A `WKWebView` talks to one authenticated, loopback-forwarded
 HTTP/WebSocket endpoint, while the guest supplies the extension host, PTYs,
 tasks, debug adapters, search, Git, native modules, and language servers.
 
-**Current state:** this is a pinned, CI-buildable scaffold. The QEMU engine has
-not yet been linked into the iVSCode target, the image has not booted on a
-physical iPad, and App Store approval is not established. Do not label the full
-tier complete from a simulator build or from successful artifact generation.
+**Current state:** the pinned QEMU engine, QEMUKit control plane, Alpine guest,
+and VS Code server are integrated into the native target and assembled by the
+full-runtime GitHub Actions workflow. The image has not yet booted on a physical
+iPhone or iPad, and App Store approval is not established. Do not label the full
+tier device-validated from a simulator build or successful artifact generation.
 
 ## Runtime architecture
 
@@ -26,33 +27,34 @@ desktop environment in the shipped closure. Its baseline is two emulated CPUs
 and 512 MiB RAM. A 768 MiB profile is only appropriate after testing memory
 pressure and obtaining any required increased-memory entitlement.
 
-iOS cannot spawn a QEMU child process. The native target must load
-`qemu-aarch64-softmmu.framework/qemu-aarch64-softmmu` in-process and call the
+iOS cannot spawn a QEMU child process. The native target therefore loads
+`qemu-aarch64-softmmu.framework/qemu-aarch64-softmmu` in-process and calls the
 three exported entry points used by UTM's `UTMQemuSystem.m`:
 
 1. `qemu_init(int, const char *[], const char *[])`
 2. `qemu_main_loop(void)`
 3. `qemu_cleanup(void)`
 
-Run those calls on a dedicated pthread. Use QEMUKit's `QEMUVirtualMachine` for
-QMP and guest-agent state, or vendor the small Apache-2.0 launcher/interface
-pieces from the pinned UTM source. UTM's headless `UTMPipeInterface` pattern
-uses four app-container FIFOs: QMP `.in`/`.out` and guest-agent `.in`/`.out`.
-No SPICE client is needed.
+`IVQemuLauncher` runs those calls on a dedicated pthread. QEMUKit's
+`QEMUVirtualMachine` owns QMP and guest-agent state, while `IVPipeInterface`
+adapts UTM's headless four-FIFO transport: QMP `.in`/`.out` and guest-agent
+`.in`/`.out`. No SPICE client is linked or needed.
 
-The relevant QEMUKit contract is
+The pinned QEMUKit contract is
 `QEMUVirtualMachine.start(launcher:interface:)`; the launcher conforms to
-`QEMULauncher`, and the pipe endpoint conforms to `QEMUInterface`. Its actor
-also exposes `stop()` and `kill()`. Keep the dynamic-library loader in the
-launcher rather than attempting `Process`, which is unavailable for this use on
-iOS.
+`QEMULauncher`, and the pipe endpoint conforms to `QEMUInterface`. The dynamic
+library loader stays in the launcher; iVSCode never attempts `Process`, `fork`,
+or `spawn`, which are unavailable for this use on iOS.
 
 Start QEMU paused with `-S`, connect QMP, negotiate capabilities, then continue
 the VM. On scene backgrounding, ask the guest helper to shut down through the
 guest agent, wait for QMP shutdown, and only then fall back to `qemuQuit`.
 Use one bounded `beginBackgroundTask` only to finish that shutdown sequence;
-expire it by forcing QEMU cleanup. There is deliberately no fake audio or
-location background mode and no claim that the VM continues while suspended.
+the expiration path may issue a safe QMP quit but never cancels QEMU from a
+foreign thread. A wedged engine remains process-owned and disables further
+full-runtime launches until the app restarts. There is deliberately no fake
+audio or location background mode and no claim that the VM continues while
+suspended.
 
 ## Hosted builds
 
@@ -67,15 +69,18 @@ TCI dependency build:
   sudo xcode-select -s /Applications/Xcode_26.0.app
 brew uninstall cmake
 brew install bison pkg-config gettext glib-utils libgpg-error nasm make meson
-pip3 install --user six pyparsing
+python3 -m venv "$GITHUB_WORKSPACE/.build/utm-python"
+"$GITHUB_WORKSPACE/.build/utm-python/bin/python" -m pip install \
+  setuptools six pyparsing distlib mako pyyaml
 export PATH="/usr/local/opt/bison/bin:/opt/homebrew/opt/bison/bin:$PATH"
 rm -f /usr/local/lib/pkgconfig/*.pc
-bash ios/Runtime/scripts/build-utm-engine.sh "$RUNNER_TEMP/UTM"
+bash ios/Runtime/scripts/build-utm-engine.sh "$GITHUB_WORKSPACE/.build/UTM"
 bash ios/Runtime/scripts/collect-framework-closure.sh \
-  "$RUNNER_TEMP/UTM/sysroot-iOS-TCI-arm64" "$RUNNER_TEMP/ivscode-engine"
+  "$GITHUB_WORKSPACE/.build/UTM/sysroot-iOS-TCI-arm64" \
+  "$GITHUB_WORKSPACE/.build/runtime/engine"
 ```
 
-UTM upstream uses Xcode 26 and `NCPU=1` for this build. The builder makes two
+UTM upstream uses Xcode 26 and `NCPU=1` for this build. The builder makes three
 auditable, fail-closed changes in its temporary checkout: it replaces UTM's
 seven-architecture TCI target list with only `aarch64-softmmu`, replaces the
 unused iOS `--enable-hvf-private` switch with `--disable-hvf`, and disables the
@@ -113,9 +118,10 @@ digest-locked by this scaffold. Lock those inputs or attach verifiable build
 provenance before treating an engine artifact as production supply-chain
 evidence.
 
-The guest job should use GitHub's native `ubuntu-24.04-arm` public runner. It
-must first build `vscode-reh-web-alpine-arm64-min`, then pass the extracted
-server directory to:
+The guest job uses GitHub's native `ubuntu-24.04-arm` public runner. It first
+builds `vscode-reh-web-alpine-arm64-min`, rebuilds both server and bundled Git
+extension native dependencies inside Alpine aarch64 containers, and then passes
+the extracted server directory to:
 
 ```sh
 sudo bash ios/Runtime/scripts/build-guest-image.sh \
@@ -135,15 +141,16 @@ security updates are published. Preserve and promote a tested guest artifact
 by its emitted checksum. A production rebuild policy should additionally use
 an immutable package snapshot or a complete mirrored package lock.
 
-The `.tar.zst` is a CI transport artifact. Unpack its verified members before
-adding them to the Xcode archive; do not link a Zstandard decompressor into the
-iOS app solely to unpack the initial guest on-device. IPA compression handles
-the mostly empty ext4 space, and first launch only copies the raw seeds into the
-app container.
+The `.tar.zst` is a CI transport artifact. `stage-runtime.sh` verifies and
+unpacks its members before Xcode adds them to the application; the iOS app does
+not link a Zstandard decompressor. The engine closure separately travels as a
+tar archive so GitHub artifact transport cannot erase Mach-O executable bits.
+IPA compression handles the mostly empty ext4 space, and first launch copies
+only the raw seeds into the app container.
 
 ## Boot contract
 
-The native launcher should assemble arguments from `manifest.json`, including:
+The native launcher assembles arguments from `manifest.json`, including:
 
 ```text
 -nodefaults -machine virt,highmem=off -cpu cortex-a72
@@ -159,14 +166,14 @@ pipe chardevs. QEMU SLIRP forwards only
 `127.0.0.1:<ephemeral-host-port>` to guest port 8000. Outbound networking stays
 enabled for Git and extension services.
 
-Generate a cryptographically random base64url token for every launch. Write it
-to an app-container file with data protection and mode `0600`, then pass
+The app generates a cryptographically random base64url token for every launch,
+writes it to an app-container file with data protection and mode `0600`, then passes
 `-fw_cfg name=opt/ivscode/token,file=<protected-token-file>`. This keeps the
 secret out of the QEMU argument vector. The guest copies it to
 `/run/ivscode/token` and starts the server with `--connection-token-file`.
-Still redact the entire `-fw_cfg` pair from diagnostics. Reserve a host port
-immediately before launch and retry on a SLIRP bind failure because port probing
-has a race.
+Still redact the entire `-fw_cfg` pair from diagnostics. A loopback host port is
+selected immediately before launch. Port probing has a small race; a bind
+failure is fail-closed and returns to the instant workspace in this revision.
 
 After QMP reports the VM running and guest-agent execution of
 `/sbin/rc-service ivscode status` succeeds,
